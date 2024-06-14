@@ -6,6 +6,15 @@ use crate::Status;
 
 use super::{ready::ready, Tether, TetherIo, TetherResolver};
 
+macro_rules! reconnect {
+    ($cx:ident, $init_error:expr, $error:ident) => {
+        match ready!(me.poll_reconnect($cx, $error)) {
+            Status::Success => continue,
+            Status::Failover(error) => return Poll::Ready(Err($error.unwrap())),
+        }
+    };
+}
+
 impl<I, T, R> AsyncRead for Tether<I, T, R>
 where
     T: AsyncRead + TetherIo<I, Error = std::io::Error>,
@@ -29,12 +38,17 @@ where
             };
 
             match result {
-                Ok(0) => return Poll::Ready(Ok(())),
-                Ok(_) => return Poll::Ready(Ok(())),
+                Ok(0) if me.resolver.eof_triggers_reconnect() => {
+                    match ready!(me.poll_reconnect(cx, None)) {
+                        Status::Success => continue,
+                        Status::Failover(error) => return Poll::Ready(Err(error.unwrap())),
+                    }
+                }
                 Err(error) => match ready!(me.poll_reconnect(cx, Some(error))) {
                     Status::Success => continue,
                     Status::Failover(error) => return Poll::Ready(Err(error.unwrap())),
                 },
+                Ok(_) => return Poll::Ready(Ok(())),
             }
         }
     }
