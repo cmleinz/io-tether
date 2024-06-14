@@ -1,6 +1,6 @@
 # io-tether
 
-Traits for defining I/O objects which will automatically reconnect upon failure.
+Traits for defining I/O objects which automatically reconnect upon failure.
 
 This project is similar in scope to [stubborn-io](https://github.com/craftytrickster/stubborn-io),
 but aims to leverage the recently stabilized `async fn` in traits, to make the
