@@ -1,12 +1,17 @@
 [package]
-name = "tether"
+name = "io-tether"
 version = "0.1.0"
+authors = ["Caleb Leinz <cmleinz@pm.me>"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/cmleinz/io-tether"
+readme = "README.md"
+keywords = ["io", "tokio"]
+publish = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pin-project-lite = { version = "0.2.14" }
 tokio = { version = "1.38.0" }
 
 [features]

@@ -2,7 +2,7 @@ use std::{pin::Pin, task::Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::Status;
+use crate::{State, Status};
 
 use super::{ready::ready, Tether, TetherIo, TetherResolver};
 
@@ -39,17 +39,46 @@ where
 
             match result {
                 Ok(0) if me.resolver.eof_triggers_reconnect() => {
-                    match ready!(me.poll_reconnect(cx, None)) {
+                    match ready!(me.poll_reconnect(cx, State::Eof)) {
                         Status::Success => continue,
-                        Status::Failover(error) => return Poll::Ready(Err(error.unwrap())),
+                        Status::Failover(error) => return Poll::Ready(Err(error.into())),
                     }
                 }
-                Err(error) => match ready!(me.poll_reconnect(cx, Some(error))) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.unwrap())),
-                },
                 Ok(_) => return Poll::Ready(Ok(())),
+                Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
+                    Status::Success => continue,
+                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
+                },
             }
         }
+    }
+}
+
+impl<I, T, R> AsyncWrite for Tether<I, T, R>
+where
+    T: AsyncWrite + TetherIo<I, Error = std::io::Error>,
+    I: Unpin,
+    R: TetherResolver<Error = std::io::Error>,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        todo!()
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        todo!()
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        todo!()
     }
 }
