@@ -8,6 +8,6 @@ implementation of reconnecting simpler for the end user.
 
 ## State
 
-This project is still very much a work in progress, I intend on adding more to 
-it in the coming days.
+This project is still very much a work in progress, expect fairly common 
+breaking changes in the short term. 
 

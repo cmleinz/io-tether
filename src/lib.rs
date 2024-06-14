@@ -1,12 +1,40 @@
+#![doc = include_str!("../README.md")]
 use std::{future::Future, task::Poll};
 
 mod implementations;
+
+/// Represents a type which drives reconnects
+///
+/// Since the disconnected method asynchronous, and is invoked when the underlying stream
+/// disconnects things like `tokio::time::sleep` work out of the box.
+pub trait TetherResolver: Unpin {
+    type Error;
+
+    fn disconnected(
+        &mut self,
+        context: &Context,
+        state: &State<Self::Error>,
+    ) -> impl Future<Output = bool> + Send;
+
+    fn eof_triggers_reconnect(&mut self) -> bool;
+}
+
+/// Represents an I/O source capable of reconnecting
+///
+/// This trait is implemented for a number of types in the library, with the implementations placed
+/// behind feature flags
+pub trait TetherIo<T>: Sized + Unpin {
+    type Error;
+
+    fn connect(initializer: &T) -> impl Future<Output = Result<Self, Self::Error>> + Send;
+}
 
 enum Status<E> {
     Success,
     Failover(State<E>),
 }
 
+/// The
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State<E> {
     Eof,
@@ -22,6 +50,7 @@ impl Into<std::io::Error> for State<std::io::Error> {
     }
 }
 
+/// A wrapper type which contains the underying I/O object, it's initializer, and resolver.
 pub struct Tether<I, T, R> {
     context: Context,
     initializer: I,
@@ -29,7 +58,62 @@ pub struct Tether<I, T, R> {
     resolver: R,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl<I, T, R> Tether<I, T, R> {
+    pub fn get_resolver(&self) -> &R {
+        &self.resolver
+    }
+
+    pub fn get_resolver_mut(&mut self) -> &mut R {
+        &mut self.resolver
+    }
+
+    /// Consume the Tether, and return the underlying I/O type
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+
+    pub fn get_inner(&self) -> &T {
+        &self.inner
+    }
+
+    pub fn get_inner_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+
+    pub fn get_context(&self) -> &Context {
+        &self.context
+    }
+
+    pub fn get_context_mut(&mut self) -> &mut Context {
+        &mut self.context
+    }
+}
+
+impl<I, T, R> Tether<I, T, R>
+where
+    T: TetherIo<I>,
+{
+    pub async fn new(initializer: I, resolver: R) -> Result<Self, T::Error> {
+        let inner = T::connect(&initializer).await?;
+
+        let me = Self {
+            context: Context::default(),
+            initializer,
+            inner,
+            resolver,
+        };
+
+        Ok(me)
+    }
+}
+
+/// Contains metrics about the underlying connection
+///
+/// Passed to the [`TetherResolver`], with each call to `disconnect`.
+///
+/// Currently tracks the number of reconnect attempts, but in the future may be expanded to include
+/// additional metrics.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Context {
     reconnection_attempts: usize,
 }
@@ -51,6 +135,8 @@ where
         mut state: State<R::Error>,
     ) -> Poll<Status<R::Error>> {
         loop {
+            self.context.reconnection_attempts += 1;
+
             // NOTE: Prevent holding the ref to error outside this block
             let retry = {
                 let mut resolver_pin = std::pin::pin!(&mut self.resolver);
@@ -76,24 +162,6 @@ where
             }
         }
     }
-}
-
-pub trait TetherResolver: Unpin {
-    type Error;
-
-    fn disconnected(
-        &mut self,
-        context: &Context,
-        state: &State<Self::Error>,
-    ) -> impl Future<Output = bool> + Send;
-
-    fn eof_triggers_reconnect(&mut self) -> bool;
-}
-
-pub trait TetherIo<T>: Sized + Unpin {
-    type Error;
-
-    fn connect(initializer: &T) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 }
 
 pub(crate) mod ready {
