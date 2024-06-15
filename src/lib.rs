@@ -26,17 +26,6 @@ pub trait TetherResolver: Unpin {
         context: &Context,
         state: &State<Self::Error>,
     ) -> impl Future<Output = bool> + Send;
-
-    /// Invoked by Tether when an end of file (EOF) is detected.
-    ///
-    /// If the implementer returns `true` here, `disconnect` will be invoked with `&State::Eof`.
-    /// Returning `false` will allow the Tether to terminate.
-    ///
-    /// # Note
-    ///
-    /// This function is called each time an EOF is detected, allowing the implementer to decide
-    /// dynamically whether to attempt to reconnect.
-    fn eof_triggers_reconnect(&mut self) -> bool;
 }
 
 /// Represents an I/O source capable of reconnecting

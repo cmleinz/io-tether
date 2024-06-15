@@ -32,12 +32,10 @@ where
             };
 
             match result {
-                Ok(0) if me.resolver.eof_triggers_reconnect() => {
-                    match ready!(me.poll_reconnect(cx, State::Eof)) {
-                        Status::Success => continue,
-                        Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                    }
-                }
+                Ok(0) => match ready!(me.poll_reconnect(cx, State::Eof)) {
+                    Status::Success => continue,
+                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
+                },
                 Ok(_) => return Poll::Ready(Ok(())),
                 Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
                     Status::Success => continue,
