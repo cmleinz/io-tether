@@ -9,6 +9,22 @@ use crate::{State, Status};
 
 use super::{ready::ready, Tether, TetherIo, TetherResolver};
 
+macro_rules! reconnect {
+    ($me:ident, $cx:ident, $state:expr) => {
+        match ready!($me.poll_reconnect($cx, $state)) {
+            Status::Success => continue,
+            Status::Failover(error) => return Poll::Ready(Err(error.into())),
+        }
+    };
+    ($me:ident, $cx:ident, $state:expr, $eof:expr) => {
+        match ready!($me.poll_reconnect($cx, $state)) {
+            Status::Success => continue,
+            Status::Failover(State::Err(error)) => return Poll::Ready(Err(error)),
+            Status::Failover(State::Eof) => return Poll::Ready($eof),
+        }
+    };
+}
+
 impl<I, T, R> AsyncRead for Tether<I, T, R>
 where
     T: AsyncRead + TetherIo<I, Error = std::io::Error>,
@@ -32,15 +48,9 @@ where
             };
 
             match result {
-                Ok(0) => match ready!(me.poll_reconnect(cx, State::Eof)) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                },
+                Ok(0) => reconnect!(me, cx, State::Eof, Ok(())),
                 Ok(_) => return Poll::Ready(Ok(())),
-                Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                },
+                Err(error) => reconnect!(me, cx, State::Err(error)),
             }
         }
     }
@@ -66,10 +76,7 @@ where
 
             match result {
                 Ok(n) => return Poll::Ready(Ok(n)),
-                Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                },
+                Err(error) => reconnect!(me, cx, State::Err(error)),
             }
         }
     }
@@ -86,10 +93,7 @@ where
 
             match result {
                 Ok(()) => return Poll::Ready(Ok(())),
-                Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                },
+                Err(error) => reconnect!(me, cx, State::Err(error)),
             }
         }
     }
@@ -106,10 +110,7 @@ where
 
             match result {
                 Ok(()) => return Poll::Ready(Ok(())),
-                Err(error) => match ready!(me.poll_reconnect(cx, State::Err(error))) {
-                    Status::Success => continue,
-                    Status::Failover(error) => return Poll::Ready(Err(error.into())),
-                },
+                Err(error) => reconnect!(me, cx, State::Err(error)),
             }
         }
     }
