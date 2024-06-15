@@ -9,6 +9,7 @@ repository = "https://github.com/cmleinz/io-tether"
 readme = "README.md"
 categories = ["asynchronous", "network-programming"]
 keywords = ["io", "async", "tokio"]
+rust-version = "1.75"
 publish = true
 
 [dependencies]

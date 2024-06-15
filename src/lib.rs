@@ -14,6 +14,7 @@ mod implementations;
 /// A very simple implementation may look something like the following:
 ///
 /// ```ignore
+/// # use io_tether::{Context, State, TetherResolver};
 /// pub struct RetryResolver;
 ///
 /// impl TetherResolver for RetryResolver {
@@ -21,6 +22,11 @@ mod implementations;
 ///
 ///     async fn disconnected(&mut self, context: &Context, state: &State<Self::Error>) -> bool {
 ///         tracing::warn!(?state, "Disconnected from server");
+
+///         if context.reconnect_count() >= 5 {
+///             return false;
+///         }
+///
 ///         tokio::time::sleep(Duration::from_secs(10)).await;
 ///         true
 ///     }
