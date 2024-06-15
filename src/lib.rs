@@ -256,6 +256,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "net")]
     #[tokio::test]
     async fn disconnect_triggers_callback() {
         let (tx, mut rx) = mpsc::channel(1);

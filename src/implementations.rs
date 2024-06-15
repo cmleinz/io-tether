@@ -1,9 +1,6 @@
 use std::{pin::Pin, task::Poll};
 
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::{TcpStream, ToSocketAddrs},
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{State, Status};
 
@@ -116,14 +113,45 @@ where
     }
 }
 
-impl<T> TetherIo<T> for TcpStream
-where
-    T: ToSocketAddrs + Clone + Send + Sync,
-{
-    type Error = std::io::Error;
+#[cfg(feature = "net")]
+mod net {
+    use super::*;
+    mod tcp {
+        use super::*;
 
-    async fn connect(initializer: &T) -> Result<Self, Self::Error> {
-        let addr = initializer.clone();
-        TcpStream::connect(addr).await
+        use tokio::net::{TcpStream, ToSocketAddrs};
+
+        impl<T> TetherIo<T> for TcpStream
+        where
+            T: ToSocketAddrs + Clone + Send + Sync,
+        {
+            type Error = std::io::Error;
+
+            async fn connect(initializer: &T) -> Result<Self, Self::Error> {
+                let addr = initializer.clone();
+                TcpStream::connect(addr).await
+            }
+        }
+    }
+
+    #[cfg(target_family = "unix")]
+    mod unix {
+        use super::*;
+
+        use std::path::Path;
+
+        use tokio::net::UnixStream;
+
+        impl<T> TetherIo<T> for UnixStream
+        where
+            T: AsRef<Path> + Clone + Send + Sync,
+        {
+            type Error = std::io::Error;
+
+            async fn connect(initializer: &T) -> Result<Self, Self::Error> {
+                let path = initializer.clone();
+                UnixStream::connect(path).await
+            }
+        }
     }
 }
