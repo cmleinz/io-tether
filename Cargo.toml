@@ -7,7 +7,8 @@ description = "Traits for defining I/O objects which automatically reconnect upo
 license = "MIT"
 repository = "https://github.com/cmleinz/io-tether"
 readme = "README.md"
-keywords = ["io", "tokio"]
+categories = ["asynchronous", "network-programming"]
+keywords = ["io", "async", "tokio"]
 publish = true
 
 [dependencies]
