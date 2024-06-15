@@ -6,7 +6,26 @@ mod implementations;
 /// Represents a type which drives reconnects
 ///
 /// Since the disconnected method asynchronous, and is invoked when the underlying stream
-/// disconnects things like `tokio::time::sleep` work out of the box.
+/// disconnects, calling asynchronous functions like [`tokio::time::sleep`] from within the body,
+/// work.
+///
+/// # Example
+///
+/// A very simple implementation may look something like the following:
+///
+/// ```ignore
+/// pub struct RetryResolver;
+///
+/// impl TetherResolver for RetryResolver {
+///     type Error = std::io::Error;
+///
+///     async fn disconnected(&mut self, context: &Context, state: &State<Self::Error>) -> bool {
+///         tracing::warn!(?state, "Disconnected from server");
+///         tokio::time::sleep(Duration::from_secs(10)).await;
+///         true
+///     }
+/// }
+/// ```
 // TODO: Remove the Unpin restriction
 pub trait TetherResolver: Unpin {
     type Error;
@@ -49,14 +68,18 @@ enum Status<E> {
     Failover(State<E>),
 }
 
-/// The type of disconnect that was detected
+/// Disconnect state
 ///
 /// Currently this is either an error, or an 'end of file'
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State<E> {
     /// End of File
+    ///
+    /// # Note
+    ///
+    /// This is also emitted when the other half of a TCP connection is closed.
     Eof,
-    /// I/O error
+    /// An I/O Error occurred
     Err(E),
 }
 
@@ -69,21 +92,21 @@ impl Into<std::io::Error> for State<std::io::Error> {
     }
 }
 
-/// A wrapper type which contains the underying I/O object, it's initializer, and resolver.
+/// A wrapper type which contains the underlying I/O object, it's initializer, and resolver.
 ///
 /// This in the main type exposed by the library. It implements [`AsyncRead`](tokio::io::AsyncRead)
-/// and [`AsyncWrite`](tokio::io::AsyncWrite) whenever the underying I/O object implements them.
+/// and [`AsyncWrite`](tokio::io::AsyncWrite) whenever the underlying I/O object implements them.
 ///
-/// Calling things like `read_buf` will result in the I/O automatically reconnecting if an error
-/// is detected during the underlying I/O call.
+/// Calling things like [`AsyncReadExt::read_buf`] will result in the I/O automatically reconnecting
+/// if an error is detected during the underlying I/O call.
 ///
 /// # Note
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
 /// way to reclaim the inner I/O type is by calling [`Tether::into_inner`]. This is by design, since
 /// in the future there may be reason to add unsafe code which cannot be guaranteed if outside
-/// callers can obtain references. In the future I may add these as unsafe functions if those
-/// cases can be described.
+/// callers can obtain references. In the future I may add these as unsafe functions if those cases
+/// can be described.
 pub struct Tether<I, T, R> {
     context: Context,
     initializer: I,

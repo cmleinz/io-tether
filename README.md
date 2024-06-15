@@ -7,15 +7,25 @@
 
 Traits for defining I/O objects which automatically reconnect upon failure.
 
-This project is similar in scope to [stubborn-io](https://github.com/craftytrickster/stubborn-io),
-but aims to leverage the recently stabilized `async fn` in traits, to make the
+[Crates.io](https://crates.io/crates/io-tether) |
+[API Docs](https://docs.rs/io-tether/latest/io_tether/) 
+
+This project is similar in scope to
+[stubborn-io](https://github.com/craftytrickster/stubborn-io), but aims to
+leverage the recently stabilized `async fn` in traits, to make the
 implementation of reconnecting simpler for the end user.
 
 ## Usage
 
-In most cases, it is expected that the consumer of this library will want to
-implement their own `TetherResolver` types. This allows them to inject arbitrary
-asynchronous code just before the I/O attempts to reconnect.
+To get started, add `io-tether` to your list of dependencies
+
+```toml
+io-tether = { version = "0.1.0" }
+```
+
+Then in most cases, it is expected that the consumer of this library will want
+to implement `TetherResolver` on their own types. This allows them to inject
+arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
 use io_tether::{TetherResolver, Context, State, Tether};
@@ -50,8 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buf = Vec::new();
     let (channel, rx) = mpsc::channel(10);
 
+    let listener = tokio::net::TcpListener::bind("localhost:8080").await?;
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind("localhost:8080").await.unwrap();
         loop {
             let (mut stream, _addr) = listener.accept().await.unwrap();
             stream.write_all(b"foo-bar").await.unwrap();
@@ -65,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tether = Tether::<_, TcpStream, _>::connect("localhost:8080", resolver)
         .await?;
 
-    tether.read_to_end(&mut buf).await.unwrap();
+    tether.read_to_end(&mut buf).await?;
     
     assert_eq!(&buf, b"foo-bar");
 
@@ -73,8 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## State
+## Stability
 
-This project is still very much a work in progress, expect fairly common 
+This project is still very much a work in progress. Expect fairly common 
 breaking changes in the short term. 
 
