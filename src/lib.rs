@@ -49,10 +49,14 @@ enum Status<E> {
     Failover(State<E>),
 }
 
-/// The
+/// The type of disconnect that was detected
+///
+/// Currently this is either an error, or an 'end of file'
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State<E> {
+    /// End of File
     Eof,
+    /// I/O error
     Err(E),
 }
 
@@ -88,6 +92,16 @@ pub struct Tether<I, T, R> {
 }
 
 impl<I, T, R> Tether<I, T, R> {
+    /// Construct a tether object from an existing I/O source
+    pub fn new(inner: T, initializer: I, resolver: R) -> Self {
+        Self {
+            context: Context::default(),
+            initializer,
+            inner,
+            resolver,
+        }
+    }
+
     /// Returns a reference to the resolver
     pub fn get_resolver(&self) -> &R {
         &self.resolver
@@ -135,14 +149,7 @@ where
     pub async fn connect(initializer: I, resolver: R) -> Result<Self, T::Error> {
         let inner = T::connect(&initializer).await?;
 
-        let me = Self {
-            context: Context::default(),
-            initializer,
-            inner,
-            resolver,
-        };
-
-        Ok(me)
+        Ok(Self::new(inner, initializer, resolver))
     }
 }
 
@@ -217,4 +224,9 @@ pub(crate) mod ready {
     }
 
     pub(crate) use ready;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }
