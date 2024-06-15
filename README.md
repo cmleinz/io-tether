@@ -17,43 +17,43 @@ use tokio::{net::TcpStream, io::AsyncReadExt, sync::mpsc};
 
 /// Custom resolver
 pub struct CallbackResolver {
-	channel: mpsc::Sender<String>,
+    channel: mpsc::Sender<String>,
 }
 
 impl TetherResolver for CallbackResolver {
-	type Error = std::io::Error;
+    type Error = std::io::Error;
 
     async fn disconnected(
         &mut self,
         context: &Context,
         state: &State<Self::Error>,
     ) -> bool {
-		match state {
-			State::Eof => false,
-			State::Err(error) => {
-				let error = error.to_string();
-				self.channel.send(error).await.unwrap();
-				true	
-			}
-		}
-	}
+        match state {
+            State::Eof => false, // No reconnection attempt will be made
+            State::Err(error) => {
+                let error = error.to_string();
+                self.channel.send(error).await.unwrap();
+                true
+            }
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let mut buf = Vec::new();
-	let (channel, rx) = mpsc::channel(10);
+    let mut buf = Vec::new();
+    let (channel, rx) = mpsc::channel(10);
 
-	let resolver = CallbackResolver {
-		channel,
-	};
-	let mut tether = Tether::<TcpStream>::connect("localhost:8080", resolver)
-		.await?;
+    let resolver = CallbackResolver {
+        channel,
+    };
+    let mut tether = Tether::<TcpStream>::connect("localhost:8080", resolver)
+        .await?;
 
-	tether.read_buf(&mut buf).await?;
-	Ok(())
+    tether.read_buf(&mut buf).await?;
+
+    Ok(())
 }
-
 ```
 
 ## State
