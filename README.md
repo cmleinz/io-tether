@@ -1,5 +1,10 @@
 # io-tether
 
+<p align="center">
+  <img src="https://cdn.akamai.steamstatic.com/apps/dota2/images/dota_react/abilities/wisp_tether.png" />
+</p>
+
+
 Traits for defining I/O objects which automatically reconnect upon failure.
 
 This project is similar in scope to [stubborn-io](https://github.com/craftytrickster/stubborn-io),
