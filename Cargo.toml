@@ -1,6 +1,6 @@
 [package]
 name = "io-tether"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Caleb Leinz <cmleinz@pm.me>"]
 edition = "2021"
 description = "Traits for defining I/O objects which automatically reconnect upon failure."
