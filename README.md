@@ -50,14 +50,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buf = Vec::new();
     let (channel, rx) = mpsc::channel(10);
 
-	tokio::spawn(async move {
-		let listener = tokio::net::TcpListener::bind("localhost:8080").await.unwrap();
-		loop {
-			let (mut stream, _addr) = listener.accept().await.unwrap();
-			stream.write_all(b"foo-bar").await.unwrap();
-			stream.shutdown().await.unwrap();
-		}
-	});
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind("localhost:8080").await.unwrap();
+        loop {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            stream.write_all(b"foo-bar").await.unwrap();
+            stream.shutdown().await.unwrap();
+        }
+    });
 
     let resolver = CallbackResolver {
         channel,
@@ -66,8 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     tether.read_to_end(&mut buf).await.unwrap();
-	
-	assert_eq!(&buf, b"foo-bar");
+    
+    assert_eq!(&buf, b"foo-bar");
 
     Ok(())
 }
