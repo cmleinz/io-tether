@@ -13,7 +13,8 @@ implement their own `TetherResolver` types. This allows them to inject arbitrary
 asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
-use tokio::{net::TcpStream, io::AsyncReadExt, sync::mpsc};
+use io_tether::{TetherResolver, Context, State, Tether};
+use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
 pub struct CallbackResolver {
@@ -44,13 +45,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buf = Vec::new();
     let (channel, rx) = mpsc::channel(10);
 
+	tokio::spawn(async move {
+		let listener = tokio::net::TcpListener::bind("localhost:8080").await.unwrap();
+		loop {
+			let (mut stream, _addr) = listener.accept().await.unwrap();
+			stream.write_all(b"foo-bar").await.unwrap();
+			stream.shutdown().await.unwrap();
+		}
+	});
+
     let resolver = CallbackResolver {
         channel,
     };
-    let mut tether = Tether::<TcpStream>::connect("localhost:8080", resolver)
+    let mut tether = Tether::<_, TcpStream, _>::connect("localhost:8080", resolver)
         .await?;
 
-    tether.read_buf(&mut buf).await?;
+    tether.read_to_end(&mut buf).await.unwrap();
+	
+	assert_eq!(&buf, b"foo-bar");
 
     Ok(())
 }

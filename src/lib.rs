@@ -229,4 +229,48 @@ pub(crate) mod ready {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::mpsc,
+    };
+
+    async fn create_tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (client, server) = tokio::join!(TcpStream::connect(addr), listener.accept());
+        (client.unwrap(), server.unwrap().0)
+    }
+
+    pub struct CallbackResolver {
+        inner: mpsc::Sender<()>,
+    }
+
+    impl TetherResolver for CallbackResolver {
+        type Error = std::io::Error;
+
+        async fn disconnected(&mut self, _context: &Context, _state: &State<Self::Error>) -> bool {
+            self.inner.send(()).await.unwrap();
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnect_triggers_callback() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let (client, mut server) = create_tcp_pair().await;
+        let resolver = CallbackResolver { inner: tx };
+
+        let mut tether = Tether::new(client, "", resolver);
+        let mut buf = Vec::new();
+
+        server.write_all(b"foo-bar").await.unwrap();
+        tether.read_buf(&mut buf).await.unwrap();
+
+        assert_eq!(&buf, b"foo-bar");
+        server.shutdown().await.unwrap();
+        tether.read_buf(&mut buf).await.unwrap();
+        assert!(rx.recv().await.is_some());
+    }
 }
