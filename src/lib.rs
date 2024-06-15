@@ -6,7 +6,7 @@ mod implementations;
 /// Represents a type which drives reconnects
 ///
 /// Since the disconnected method asynchronous, and is invoked when the underlying stream
-/// disconnects, calling asynchronous functions like [`tokio::time::sleep`] from within the body,
+/// disconnects, calling asynchronous functions like `tokio::time::sleep` from within the body,
 /// work.
 ///
 /// # Example
@@ -83,9 +83,9 @@ pub enum State<E> {
     Err(E),
 }
 
-impl Into<std::io::Error> for State<std::io::Error> {
-    fn into(self) -> std::io::Error {
-        match self {
+impl From<State<std::io::Error>> for std::io::Error {
+    fn from(value: State<std::io::Error>) -> Self {
+        match value {
             State::Eof => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Eof error"),
             State::Err(error) => error,
         }
@@ -97,7 +97,7 @@ impl Into<std::io::Error> for State<std::io::Error> {
 /// This in the main type exposed by the library. It implements [`AsyncRead`](tokio::io::AsyncRead)
 /// and [`AsyncWrite`](tokio::io::AsyncWrite) whenever the underlying I/O object implements them.
 ///
-/// Calling things like [`AsyncReadExt::read_buf`] will result in the I/O automatically reconnecting
+/// Calling things like `read_buf` will result in the I/O automatically reconnecting
 /// if an error is detected during the underlying I/O call.
 ///
 /// # Note
