@@ -6,8 +6,9 @@ mod implementations;
 /// Represents a type which drives reconnects
 ///
 /// Since the disconnected method asynchronous, and is invoked when the underlying stream
-/// disconnects, calling asynchronous functions like `tokio::time::sleep` from within the body,
-/// work.
+/// disconnects, calling asynchronous functions like
+/// [`tokio::time::sleep`](https://docs.rs/tokio/latest/tokio/time/fn.sleep.html) from within the
+/// body, work.
 ///
 /// # Example
 ///
@@ -74,9 +75,9 @@ enum Status<E> {
     Failover(State<E>),
 }
 
-/// Disconnect state
+/// The underlying cause of the I/O disconnect
 ///
-/// Currently this is either an error, or an 'end of file'
+/// Currently this is either an error, or an 'end of file'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State<E> {
     /// End of File
@@ -103,8 +104,10 @@ impl From<State<std::io::Error>> for std::io::Error {
 /// This in the main type exposed by the library. It implements [`AsyncRead`](tokio::io::AsyncRead)
 /// and [`AsyncWrite`](tokio::io::AsyncWrite) whenever the underlying I/O object implements them.
 ///
-/// Calling things like `read_buf` will result in the I/O automatically reconnecting
-/// if an error is detected during the underlying I/O call.
+/// Calling things like
+/// [`read_buf`](https://docs.rs/tokio/latest/tokio/io/trait.AsyncReadExt.html#method.read_buf) will
+/// result in the I/O automatically reconnecting if an error is detected during the underlying I/O
+/// call.
 ///
 /// # Note
 ///
@@ -122,6 +125,10 @@ pub struct Tether<I, T, R> {
 
 impl<I, T, R> Tether<I, T, R> {
     /// Construct a tether object from an existing I/O source
+    ///
+    /// # Note
+    ///
+    /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
     pub fn new(inner: T, initializer: I, resolver: R) -> Self {
         Self {
             context: Context::default(),
@@ -173,7 +180,7 @@ where
 {
     /// Connect to the I/O source
     ///
-    /// Invokes TetherIo::connect to establish the connection, the same method which is called
+    /// Invokes [`TetherIo::connect`] to establish the connection, the same method which is called
     /// when Tether attempts to reconnect.
     pub async fn connect(initializer: I, resolver: R) -> Result<Self, T::Error> {
         let inner = T::connect(&initializer).await?;

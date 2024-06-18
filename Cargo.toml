@@ -13,10 +13,10 @@ rust-version = "1.75"
 publish = true
 
 [dependencies]
-tokio = { version = "1.38.0" }
+tokio = { version = "1" }
 
 [dev-dependencies]
-tokio = { version = "1.38.0", features = ["full", "macros"] }
+tokio = { version = "1", features = ["full", "macros"] }
 
 [features]
 default = ["net"]
