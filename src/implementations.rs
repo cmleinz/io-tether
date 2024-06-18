@@ -121,6 +121,15 @@ mod net {
 
         use tokio::net::{TcpStream, ToSocketAddrs};
 
+        impl<I, R> Tether<I, TcpStream, R>
+        where
+            I: ToSocketAddrs + Clone + Send + Sync,
+        {
+            pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
+                Self::connect(initializer, resolver).await
+            }
+        }
+
         impl<T> TetherIo<T> for TcpStream
         where
             T: ToSocketAddrs + Clone + Send + Sync,
@@ -141,6 +150,15 @@ mod net {
         use std::path::Path;
 
         use tokio::net::UnixStream;
+
+        impl<I, R> Tether<I, UnixStream, R>
+        where
+            I: AsRef<Path> + Clone + Send + Sync,
+        {
+            pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
+                Self::connect(initializer, resolver).await
+            }
+        }
 
         impl<T> TetherIo<T> for UnixStream
         where
