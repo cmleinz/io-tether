@@ -20,7 +20,7 @@ implementation of reconnecting simpler for the end user.
 To get started, add `io-tether` to your list of dependencies
 
 ```toml
-io-tether = { version = "0.1.2" }
+io-tether = { version = "0.1.3" }
 ```
 
 Then in most cases, it is expected that the consumer of this library will want
