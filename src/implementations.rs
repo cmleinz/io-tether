@@ -1,113 +1,82 @@
 use std::{pin::Pin, task::Poll};
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncRead;
 
-use crate::{State, Status};
+use crate::{FutState, State};
 
 use super::{ready::ready, Tether, TetherIo, TetherResolver};
 
-macro_rules! reconnect {
-    ($me:ident, $cx:ident, $state:expr) => {
-        match ready!($me.poll_reconnect($cx, $state)) {
-            Status::Success => continue,
-            Status::Failover(error) => return Poll::Ready(Err(error.into())),
-        }
-    };
-    ($me:ident, $cx:ident, $state:expr, $eof:expr) => {
-        match ready!($me.poll_reconnect($cx, $state)) {
-            Status::Success => continue,
-            Status::Failover(State::Err(error)) => return Poll::Ready(Err(error)),
-            Status::Failover(State::Eof) => return Poll::Ready($eof),
-        }
-    };
-}
-
 impl<I, T, R> AsyncRead for Tether<I, T, R>
 where
-    T: AsyncRead + TetherIo<I, Error = std::io::Error>,
-    I: Unpin,
-    R: TetherResolver<Error = std::io::Error>,
+    T: AsyncRead + TetherIo<I>,
+    I: Unpin + Clone,
+    R: 'static + TetherResolver,
 {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let me = self.get_mut();
+        let mut me = self.as_mut();
 
         loop {
-            let result = {
-                let depth = buf.filled().len();
-                let inner_pin = std::pin::pin!(&mut me.inner);
-                let result = ready!(inner_pin.poll_read(cx, buf));
-                let read_bytes = buf.filled().len().saturating_sub(depth);
-                result.map(|_| read_bytes)
-            };
+            match me.futs {
+                FutState::Connected => {
+                    let result = {
+                        let depth = buf.filled().len();
+                        let inner_pin = std::pin::pin!(&mut me.inner);
+                        let result = ready!(inner_pin.poll_read(cx, buf));
+                        let read_bytes = buf.filled().len().saturating_sub(depth);
+                        result.map(|_| read_bytes)
+                    };
 
-            match result {
-                Ok(0) => reconnect!(me, cx, State::Eof, Ok(())),
-                Ok(_) => return Poll::Ready(Ok(())),
-                Err(error) => reconnect!(me, cx, State::Err(error)),
-            }
-        }
-    }
-}
+                    match result {
+                        Ok(0) => {
+                            *me.state.borrow_mut() = State::Eof;
+                            let fut = me.disconnected_fut();
+                            let fut = fut.into_pin();
+                            me.futs = FutState::Disconnected(fut);
+                        }
+                        Ok(_) => return Poll::Ready(Ok(())),
+                        Err(error) => {
+                            *me.state.borrow_mut() = State::Err(error);
+                            let fut = me.disconnected_fut();
+                            let fut = fut.into_pin();
+                            me.futs = FutState::Disconnected(fut);
+                        }
+                    }
+                }
+                FutState::Disconnected(ref mut fut) => {
+                    let retry = ready!(fut.as_mut().poll(cx));
 
-// TODO: Create generic version of this to avoid duplication
-impl<I, T, R> AsyncWrite for Tether<I, T, R>
-where
-    T: AsyncWrite + TetherIo<I, Error = std::io::Error>,
-    I: Unpin,
-    R: TetherResolver<Error = std::io::Error>,
-{
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        let me = self.get_mut();
+                    if retry {
+                        let init = me.initializer.clone();
+                        let reconnect_fut = Box::pin(T::reconnect(init));
+                        me.futs = FutState::Reconnecting(reconnect_fut);
+                    } else {
+                        let err = &*me.state.borrow();
+                        let err = err.into();
+                        return Poll::Ready(Err(err));
+                    }
+                }
+                FutState::Reconnecting(ref mut fut) => {
+                    let result = ready!(fut.as_mut().poll(cx));
+                    me.context.borrow_mut().reconnection_attempts += 1;
 
-        loop {
-            let inner_pin = std::pin::pin!(&mut me.inner);
-            let result = ready!(inner_pin.poll_write(cx, buf));
-
-            match result {
-                Ok(n) => return Poll::Ready(Ok(n)),
-                Err(error) => reconnect!(me, cx, State::Err(error)),
-            }
-        }
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        let me = self.get_mut();
-
-        loop {
-            let inner_pin = std::pin::pin!(&mut me.inner);
-            let result = ready!(inner_pin.poll_flush(cx));
-
-            match result {
-                Ok(()) => return Poll::Ready(Ok(())),
-                Err(error) => reconnect!(me, cx, State::Err(error)),
-            }
-        }
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        let me = self.get_mut();
-
-        loop {
-            let inner_pin = std::pin::pin!(&mut me.inner);
-            let result = ready!(inner_pin.poll_shutdown(cx));
-
-            match result {
-                Ok(()) => return Poll::Ready(Ok(())),
-                Err(error) => reconnect!(me, cx, State::Err(error)),
+                    match result {
+                        Ok(new_thing) => {
+                            me.inner = new_thing;
+                            let fut = me.reconnected_fut();
+                            let fut = fut.into_pin();
+                            me.futs = FutState::Reconnected(fut);
+                        }
+                        Err(error) => *me.state.borrow_mut() = State::Err(error),
+                    }
+                }
+                FutState::Reconnected(ref mut fut) => {
+                    ready!(fut.as_mut().poll(cx));
+                    me.futs = FutState::Connected;
+                }
             }
         }
     }
@@ -123,7 +92,8 @@ mod net {
 
         impl<I, R> Tether<I, TcpStream, R>
         where
-            I: ToSocketAddrs + Clone + Send + Sync,
+            R: TetherResolver,
+            I: 'static + ToSocketAddrs + Clone + Send + Sync,
         {
             pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
                 Self::connect(initializer, resolver).await
@@ -132,11 +102,9 @@ mod net {
 
         impl<T> TetherIo<T> for TcpStream
         where
-            T: ToSocketAddrs + Clone + Send + Sync,
+            T: 'static + ToSocketAddrs + Clone + Send + Sync,
         {
-            type Error = std::io::Error;
-
-            async fn connect(initializer: &T) -> Result<Self, Self::Error> {
+            async fn connect(initializer: T) -> Result<Self, std::io::Error> {
                 let addr = initializer.clone();
                 TcpStream::connect(addr).await
             }
@@ -153,7 +121,8 @@ mod net {
 
         impl<I, R> Tether<I, UnixStream, R>
         where
-            I: AsRef<Path> + Clone + Send + Sync,
+            R: TetherResolver,
+            I: 'static + AsRef<Path> + Clone + Send + Sync,
         {
             pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
                 Self::connect(initializer, resolver).await
@@ -162,13 +131,10 @@ mod net {
 
         impl<T> TetherIo<T> for UnixStream
         where
-            T: AsRef<Path> + Clone + Send + Sync,
+            T: 'static + AsRef<Path> + Clone + Send + Sync,
         {
-            type Error = std::io::Error;
-
-            async fn connect(initializer: &T) -> Result<Self, Self::Error> {
-                let path = initializer.clone();
-                UnixStream::connect(path).await
+            async fn connect(initializer: T) -> Result<Self, std::io::Error> {
+                UnixStream::connect(initializer).await
             }
         }
     }
