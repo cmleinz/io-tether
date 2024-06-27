@@ -93,7 +93,7 @@ mod net {
         impl<I, R> Tether<I, TcpStream, R>
         where
             R: TetherResolver,
-            I: 'static + ToSocketAddrs + Clone + Send + Sync,
+            I: 'static + ToSocketAddrs + Clone + Send,
         {
             pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
                 Self::connect(initializer, resolver).await
@@ -102,7 +102,7 @@ mod net {
 
         impl<T> TetherIo<T> for TcpStream
         where
-            T: 'static + ToSocketAddrs + Clone + Send + Sync,
+            T: 'static + ToSocketAddrs + Clone + Send,
         {
             async fn connect(initializer: T) -> Result<Self, std::io::Error> {
                 let addr = initializer.clone();
@@ -122,7 +122,7 @@ mod net {
         impl<I, R> Tether<I, UnixStream, R>
         where
             R: TetherResolver,
-            I: 'static + AsRef<Path> + Clone + Send + Sync,
+            I: 'static + AsRef<Path> + Clone + Send,
         {
             pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
                 Self::connect(initializer, resolver).await
@@ -131,7 +131,7 @@ mod net {
 
         impl<T> TetherIo<T> for UnixStream
         where
-            T: 'static + AsRef<Path> + Clone + Send + Sync,
+            T: 'static + AsRef<Path> + Clone + Send,
         {
             async fn connect(initializer: T) -> Result<Self, std::io::Error> {
                 UnixStream::connect(initializer).await
