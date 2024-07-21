@@ -1,4 +1,4 @@
-use std::{pin::Pin, task::Poll};
+use std::{future::Future, pin::Pin, task::Poll};
 
 use tokio::io::AsyncRead;
 
@@ -17,32 +17,26 @@ where
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let mut me = self.as_mut();
+        let mut this = self.project();
 
         loop {
-            match me.futs {
+            match this.idk.futs {
                 FutState::Connected => {
                     let result = {
                         let depth = buf.filled().len();
-                        let inner_pin = std::pin::pin!(&mut me.inner);
-                        let result = ready!(inner_pin.poll_read(cx, buf));
+                        let inner = Pin::new(&mut this.inner);
+                        let result = ready!(inner.poll_read(cx, buf));
                         let read_bytes = buf.filled().len().saturating_sub(depth);
                         result.map(|_| read_bytes)
                     };
 
                     match result {
                         Ok(0) => {
-                            *me.state.borrow_mut() = State::Eof;
-                            let fut = me.disconnected_fut();
-                            let fut = fut.into_pin();
-                            me.futs = FutState::Disconnected(fut);
+                            unsafe { this.idk.to_disconnected(State::Eof) };
                         }
                         Ok(_) => return Poll::Ready(Ok(())),
                         Err(error) => {
-                            *me.state.borrow_mut() = State::Err(error);
-                            let fut = me.disconnected_fut();
-                            let fut = fut.into_pin();
-                            me.futs = FutState::Disconnected(fut);
+                            unsafe { this.idk.to_disconnected(State::Err(error)) };
                         }
                     }
                 }
@@ -50,32 +44,31 @@ where
                     let retry = ready!(fut.as_mut().poll(cx));
 
                     if retry {
-                        let init = me.initializer.clone();
+                        let init = this.initializer.clone();
                         let reconnect_fut = Box::pin(T::reconnect(init));
-                        me.futs = FutState::Reconnecting(reconnect_fut);
+                        this.idk.futs = FutState::Reconnecting(reconnect_fut);
                     } else {
-                        let err = &*me.state.borrow();
-                        let err = err.into();
+                        let err = std::io::Error::from(&this.idk.state);
                         return Poll::Ready(Err(err));
                     }
                 }
                 FutState::Reconnecting(ref mut fut) => {
                     let result = ready!(fut.as_mut().poll(cx));
-                    me.context.borrow_mut().reconnection_attempts += 1;
 
                     match result {
                         Ok(new_thing) => {
-                            me.inner = new_thing;
-                            let fut = me.reconnected_fut();
-                            let fut = fut.into_pin();
-                            me.futs = FutState::Reconnected(fut);
+                            *this.inner = new_thing;
+                            unsafe { this.idk.to_reconnected() };
                         }
-                        Err(error) => *me.state.borrow_mut() = State::Err(error),
+                        Err(error) => {
+                            this.idk.context.reconnection_attempts += 1;
+                            unsafe { this.idk.to_disconnected(State::Err(error)) };
+                        }
                     }
                 }
                 FutState::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll(cx));
-                    me.futs = FutState::Connected;
+                    this.idk.futs = FutState::Connected;
                 }
             }
         }

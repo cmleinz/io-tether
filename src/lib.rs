@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-use std::{cell::RefCell, future::Future, pin::Pin, sync::Arc};
+use std::{cell::RefCell, future::Future, marker::PhantomPinned, pin::Pin, sync::Arc};
 
 mod implementations;
 
@@ -34,6 +34,7 @@ mod implementations;
 /// }
 /// ```
 // TODO: Remove the Unpin restriction
+// NOTE: These probably can't be &mut self. If we give the user mut access they could invalidate out pin guarantees
 pub trait TetherResolver: Unpin {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
@@ -46,12 +47,12 @@ pub trait TetherResolver: Unpin {
     /// in which case the end of file was reached, or an error. This information can be leveraged
     /// in this function to determine whether to attempt to reconnect.
     fn disconnected(
-        &mut self,
+        &self,
         context: &Context,
         state: &State,
-    ) -> impl Future<Output = bool> + Send;
+    ) -> impl Future<Output = bool> + 'static + Send;
 
-    fn reconnected(&mut self, _context: &Context) -> impl Future<Output = ()> + Send {
+    fn reconnected(&self, _context: &Context) -> impl Future<Output = ()> + 'static + Send {
         std::future::ready(())
     }
 }
@@ -71,46 +72,6 @@ pub trait TetherIo<T>: Sized + Unpin {
         initializer: T,
     ) -> impl Future<Output = Result<Self, std::io::Error>> + 'static + Send {
         Self::connect(initializer)
-    }
-}
-
-struct DisconnectedFut<T: TetherResolver> {
-    context: Arc<RefCell<Context>>,
-    state: Arc<RefCell<State>>,
-    resolver: Arc<RefCell<T>>,
-}
-
-impl<T> DisconnectedFut<T>
-where
-    T: 'static + TetherResolver,
-{
-    fn into_pin(self) -> Pin<Box<dyn Future<Output = bool>>> {
-        Box::pin(async move {
-            let resolver = &mut *self.resolver.borrow_mut();
-            let context = &*self.context.borrow();
-            let state = &*self.state.borrow();
-
-            resolver.disconnected(context, state).await
-        })
-    }
-}
-
-struct ReconnectedFut<T: TetherResolver> {
-    context: Arc<RefCell<Context>>,
-    resolver: Arc<RefCell<T>>,
-}
-
-impl<T> ReconnectedFut<T>
-where
-    T: 'static + TetherResolver,
-{
-    fn into_pin(self) -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(async move {
-            let resolver = &mut *self.resolver.borrow_mut();
-            let context = &*self.context.borrow();
-
-            resolver.reconnected(context).await
-        })
     }
 }
 
@@ -159,13 +120,56 @@ impl From<&State> for std::io::Error {
 /// in the future there may be reason to add unsafe code which cannot be guaranteed if outside
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
-pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
-    context: Arc<RefCell<Context>>,
-    initializer: I,
-    inner: T,
-    resolver: Arc<RefCell<R>>,
-    state: Arc<RefCell<State>>,
+// pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
+//     // NOTE: Keep this first so it is dropped first
+//     futs: FutState<T>,
+//     context: Context,
+//     initializer: I,
+//     inner: T,
+//     resolver: R,
+//     state: State,
+//     _phantom: PhantomPinned,
+// }
+
+pin_project_lite::pin_project! {
+    pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
+        idk: TetherInner<R, T>,
+        initializer: I,
+        inner: T,
+    }
+}
+
+struct TetherInner<R, T> {
     futs: FutState<T>,
+    context: Context,
+    resolver: R,
+    state: State,
+}
+
+impl<R, T> TetherInner<R, T>
+where
+    R: 'static + TetherResolver,
+{
+    unsafe fn to_disconnected(&mut self, state: State) {
+        self.state = state;
+
+        let context: &'static Context = &*(&self.context as *const Context);
+        let state: &'static State = &*(&self.state as *const State);
+        let resolver: &'static R = &*(&self.resolver as *const R);
+
+        let fut = Box::pin(resolver.disconnected(context, state));
+
+        self.futs = FutState::Disconnected(fut);
+    }
+
+    unsafe fn to_reconnected(&mut self) {
+        let context: &'static Context = &*(&self.context as *const Context);
+        let resolver: &'static R = &*(&self.resolver as *const R);
+
+        let fut = Box::pin(resolver.reconnected(context));
+
+        self.futs = FutState::Reconnected(fut);
+    }
 }
 
 impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
@@ -175,45 +179,34 @@ impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
     pub fn new(inner: T, initializer: I, resolver: R) -> Self {
+        let idk = TetherInner {
+            futs: FutState::Connected,
+            context: Context::default(),
+            resolver,
+            state: State::Eof,
+        };
+
         Self {
-            context: Default::default(),
             initializer,
             inner,
-            resolver: Arc::new(RefCell::new(resolver)),
-            futs: Default::default(),
-            state: Arc::new(RefCell::new(State::Eof)),
+            idk,
         }
     }
 
-    fn disconnected_fut(&self) -> DisconnectedFut<R> {
-        DisconnectedFut {
-            context: self.context.clone(),
-            state: self.state.clone(),
-            resolver: self.resolver.clone(),
-        }
-    }
+    // /// Returns a reference to the initializer
+    // pub fn get_initializer(&self) -> &I {
+    //     &self.initializer
+    // }
 
-    fn reconnected_fut(&self) -> ReconnectedFut<R> {
-        ReconnectedFut {
-            context: self.context.clone(),
-            resolver: self.resolver.clone(),
-        }
-    }
+    // /// Returns a mutable reference to the initializer
+    // pub fn get_initializer_mut(&mut self) -> &mut I {
+    //     &mut self.initializer
+    // }
 
-    /// Returns a reference to the initializer
-    pub fn get_initializer(&self) -> &I {
-        &self.initializer
-    }
-
-    /// Returns a mutable reference to the initializer
-    pub fn get_initializer_mut(&mut self) -> &mut I {
-        &mut self.initializer
-    }
-
-    /// Consume the Tether, and return the underlying I/O type
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
+    // /// Consume the Tether, and return the underlying I/O type
+    // pub fn into_inner(self) -> T {
+    //     self.inner
+    // }
 }
 
 impl<I, T, R> Tether<I, T, R>
