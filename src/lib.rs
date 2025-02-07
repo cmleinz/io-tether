@@ -36,7 +36,7 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 /// }
 /// ```
 // TODO: Remove the Unpin restriction
-pub trait TetherResolver: Unpin {
+pub trait Resolver: Unpin {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
     /// Returning `true` will result in a reconnect being attempted via `<T as TetherIo>::reconnect`,
@@ -58,7 +58,7 @@ pub trait TetherResolver: Unpin {
 ///
 /// This trait is implemented for a number of types in the library, with the implementations placed
 /// behind feature flags
-pub trait TetherIo<T>: Sized + Unpin {
+pub trait Io<T>: Sized + Unpin {
     /// Initializes the connection to the I/O source
     fn connect(
         initializer: T,
@@ -146,8 +146,8 @@ impl From<&State> for std::io::Error {
 /// in the future there may be reason to add unsafe code which cannot be guaranteed if outside
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
-pub struct Tether<I, T: TetherIo<I>, R> {
-    futs: FutState<T>,
+pub struct Tether<I, T: Io<I>, R> {
+    state: StateMachine<T>,
     inner: TetherInner<I, T, R>,
 }
 
@@ -155,15 +155,15 @@ pub struct Tether<I, T: TetherIo<I>, R> {
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
 /// larger futs state machine
-struct TetherInner<I, T: TetherIo<I>, R> {
+struct TetherInner<I, T: Io<I>, R> {
     context: Context,
     initializer: I,
-    inner: T,
+    io: T,
     resolver: R,
     state: State,
 }
 
-impl<I, T: TetherIo<I>, R: TetherResolver> TetherInner<I, T, R> {
+impl<I, T: Io<I>, R: Resolver> TetherInner<I, T, R> {
     fn disconnected(&mut self) -> PinFut<bool> {
         self.resolver.disconnected(&self.context, &self.state)
     }
@@ -173,7 +173,7 @@ impl<I, T: TetherIo<I>, R: TetherResolver> TetherInner<I, T, R> {
     }
 }
 
-impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
+impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     /// Construct a tether object from an existing I/O source
     ///
     /// # Note
@@ -181,11 +181,11 @@ impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
     pub fn new(inner: T, initializer: I, resolver: R) -> Self {
         Self {
-            futs: Default::default(),
+            state: Default::default(),
             inner: TetherInner {
                 context: Default::default(),
                 initializer,
-                inner,
+                io: inner,
                 resolver,
                 state: State::Eof,
             },
@@ -204,14 +204,14 @@ impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
 
     /// Consume the Tether, and return the underlying I/O type
     pub fn into_inner(self) -> T {
-        self.inner.inner
+        self.inner.io
     }
 }
 
 impl<I, T, R> Tether<I, T, R>
 where
-    R: TetherResolver,
-    T: TetherIo<I>,
+    R: Resolver,
+    T: Io<I>,
     I: Clone,
 {
     /// Connect to the I/O source
@@ -226,7 +226,7 @@ where
 }
 
 #[derive(Default)]
-enum FutState<T> {
+enum StateMachine<T> {
     #[default]
     Connected,
     Disconnected(PinFut<bool>),

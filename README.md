@@ -29,7 +29,7 @@ arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
 use std::time::Duration;
-use io_tether::{TetherResolver, Context, State, Tether, PinFut};
+use io_tether::{Resolver, Context, State, Tether, PinFut};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
@@ -37,7 +37,7 @@ pub struct CallbackResolver {
     channel: mpsc::Sender<()>,
 }
 
-impl TetherResolver for CallbackResolver {
+impl Resolver for CallbackResolver {
     fn disconnected(
         &mut self,
         context: &Context,

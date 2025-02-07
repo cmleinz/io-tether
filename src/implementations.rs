@@ -2,52 +2,52 @@ use std::{ops::ControlFlow, pin::Pin, task::Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{FutState, State, TetherInner};
+use crate::{State, StateMachine, TetherInner};
 
-use super::{ready::ready, Tether, TetherIo, TetherResolver};
+use super::{ready::ready, Io, Resolver, Tether};
 
 macro_rules! connected {
     ($me:expr, $poll_method:ident, $cx:expr, $($args:expr),*) => {
         loop {
-            match $me.futs {
-                FutState::Connected => {
+            match $me.state {
+                StateMachine::Connected => {
                     let new = Pin::new(&mut $me.inner);
                     let cont = ready!(new.$poll_method($cx, $($args),*));
 
                     match cont {
-                        ControlFlow::Continue(fut) => $me.futs = fut,
+                        ControlFlow::Continue(fut) => $me.state = fut,
                         ControlFlow::Break(val) => return Poll::Ready(val),
                     }
                 }
-                FutState::Disconnected(ref mut fut) => {
+                StateMachine::Disconnected(ref mut fut) => {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
                         let init = $me.inner.initializer.clone();
                         let reconnect_fut = Box::pin(T::reconnect(init));
-                        $me.futs = FutState::Reconnecting(reconnect_fut);
+                        $me.state = StateMachine::Reconnecting(reconnect_fut);
                     } else {
                         let err = &$me.inner.state;
                         let err = err.into();
                         return Poll::Ready(Err(err));
                     }
                 }
-                FutState::Reconnecting(ref mut fut) => {
+                StateMachine::Reconnecting(ref mut fut) => {
                     let result = ready!(fut.as_mut().poll($cx));
                     $me.inner.context.reconnection_attempts += 1;
 
                     match result {
                         Ok(new_io) => {
-                            $me.inner.inner = new_io;
+                            $me.inner.io = new_io;
                             let fut = $me.inner.reconnected();
-                            $me.futs = FutState::Reconnected(fut);
+                            $me.state = StateMachine::Reconnected(fut);
                         }
                         Err(error) => $me.inner.state = State::Err(error),
                     }
                 }
-                FutState::Reconnected(ref mut fut) => {
+                StateMachine::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
-                    $me.futs = FutState::Connected;
+                    $me.state = StateMachine::Connected;
                 }
             }
         }
@@ -56,20 +56,20 @@ macro_rules! connected {
 
 impl<I, T, R> TetherInner<I, T, R>
 where
-    T: AsyncRead + TetherIo<I>,
+    T: AsyncRead + Io<I>,
     I: Unpin + Clone,
-    R: 'static + TetherResolver,
+    R: 'static + Resolver,
 {
     fn poll_read_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, FutState<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
         let mut me = self.as_mut();
 
         let result = {
             let depth = buf.filled().len();
-            let inner_pin = std::pin::pin!(&mut me.inner);
+            let inner_pin = std::pin::pin!(&mut me.io);
             let result = ready!(inner_pin.poll_read(cx, buf));
             let read_bytes = buf.filled().len().saturating_sub(depth);
             result.map(|_| read_bytes)
@@ -79,13 +79,13 @@ where
             Ok(0) => {
                 me.state = State::Eof;
                 let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
                 me.state = State::Err(error);
                 let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
         }
     }
@@ -93,9 +93,9 @@ where
 
 impl<I, T, R> AsyncRead for Tether<I, T, R>
 where
-    T: AsyncRead + TetherIo<I>,
+    T: AsyncRead + Io<I>,
     I: Unpin + Clone,
-    R: 'static + TetherResolver,
+    R: 'static + Resolver,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -110,19 +110,19 @@ where
 
 impl<I, T, R> TetherInner<I, T, R>
 where
-    T: AsyncWrite + TetherIo<I>,
+    T: AsyncWrite + Io<I>,
     I: Unpin + Clone,
-    R: 'static + TetherResolver,
+    R: 'static + Resolver,
 {
     fn poll_write_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<ControlFlow<std::io::Result<usize>, FutState<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<usize>, StateMachine<T>>> {
         let mut me = self.as_mut();
 
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.inner);
+            let inner_pin = std::pin::pin!(&mut me.io);
             ready!(inner_pin.poll_write(cx, buf))
         };
 
@@ -130,13 +130,13 @@ where
             Ok(0) => {
                 me.state = State::Eof;
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
             Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
             Err(error) => {
                 me.state = State::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
         }
     }
@@ -144,11 +144,11 @@ where
     fn poll_flush_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, FutState<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
         let mut me = self.as_mut();
 
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.inner);
+            let inner_pin = std::pin::pin!(&mut me.io);
             ready!(inner_pin.poll_flush(cx))
         };
 
@@ -157,7 +157,7 @@ where
             Err(error) => {
                 me.state = State::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
         }
     }
@@ -165,11 +165,11 @@ where
     fn poll_shutdown_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, FutState<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
         let mut me = self.as_mut();
 
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.inner);
+            let inner_pin = std::pin::pin!(&mut me.io);
             ready!(inner_pin.poll_shutdown(cx))
         };
 
@@ -178,7 +178,7 @@ where
             Err(error) => {
                 me.state = State::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(FutState::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
         }
     }
@@ -186,9 +186,9 @@ where
 
 impl<I, T, R> AsyncWrite for Tether<I, T, R>
 where
-    T: AsyncWrite + TetherIo<I>,
+    T: AsyncWrite + Io<I>,
     I: Unpin + Clone,
-    R: 'static + TetherResolver,
+    R: 'static + Resolver,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -230,7 +230,7 @@ mod net {
 
         impl<I, R> Tether<I, TcpStream, R>
         where
-            R: TetherResolver,
+            R: Resolver,
             I: 'static + ToSocketAddrs + Clone + Send + Sync,
         {
             pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
@@ -238,7 +238,7 @@ mod net {
             }
         }
 
-        impl<T> TetherIo<T> for TcpStream
+        impl<T> Io<T> for TcpStream
         where
             T: 'static + ToSocketAddrs + Clone + Send + Sync,
         {
@@ -259,7 +259,7 @@ mod net {
 
         impl<I, R> Tether<I, UnixStream, R>
         where
-            R: TetherResolver,
+            R: Resolver,
             I: 'static + AsRef<Path> + Clone + Send + Sync,
         {
             pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
@@ -267,7 +267,7 @@ mod net {
             }
         }
 
-        impl<T> TetherIo<T> for UnixStream
+        impl<T> Io<T> for UnixStream
         where
             T: 'static + AsRef<Path> + Clone + Send + Sync,
         {
