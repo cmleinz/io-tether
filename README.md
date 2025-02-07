@@ -4,27 +4,26 @@
   <img src="https://cdn.akamai.steamstatic.com/apps/dota2/images/dota_react/abilities/wisp_tether.png" />
 </p>
 
+[![Crates.io](https://img.shields.io/crates/v/io-tether.svg)](https://crates.io/crates/io-tether)
+[![Documentation](https://docs.rs/io-tether/badge.svg)](https://docs.rs/io-tether/)
 
 Traits for defining I/O objects which automatically reconnect upon failure.
 
-[Crates.io](https://crates.io/crates/io-tether) |
-[API Docs](https://docs.rs/io-tether/latest/io_tether/) 
-
 This project is similar in scope to
-[stubborn-io](https://github.com/craftytrickster/stubborn-io), but aims to
-leverage the recently stabilized `async fn` in traits, to make the
-implementation of reconnecting simpler for the end user.
+[stubborn-io](https://github.com/craftytrickster/stubborn-io), but provides
+a trait-based solution aimed at allowing the user to define async functions
+for various errors.
 
 ## Usage
 
 To get started, add `io-tether` to your list of dependencies
 
 ```toml
-io-tether = { version = "0.1.3" }
+io-tether = { version = "0.2.0" }
 ```
 
 Then in most cases, it is expected that the consumer of this library will want
-to implement `TetherResolver` on their own types. This allows them to inject
+to implement `Resolver` on their own types. This allows them to inject
 arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
