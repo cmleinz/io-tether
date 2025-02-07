@@ -34,7 +34,7 @@ macro_rules! connected {
                 }
                 StateMachine::Reconnecting(ref mut fut) => {
                     let result = ready!(fut.as_mut().poll($cx));
-                    $me.inner.context.reconnection_attempts += 1;
+                    $me.inner.context.increment_attempts();
 
                     match result {
                         Ok(new_io) => {
@@ -47,7 +47,7 @@ macro_rules! connected {
                 }
                 StateMachine::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
-                    $me.state = StateMachine::Connected;
+                    $me.reconnect();
                 }
             }
         }

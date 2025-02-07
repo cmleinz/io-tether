@@ -35,7 +35,7 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///         println!("WARN: Disconnected from server {:?}", state);
 ///         self.0 = true;
 ///
-///         if context.reconnect_count() >= 5 {
+///         if context.current_reconnect_attempts() >= 5 || context.total_reconnect_attempts() >= 50 {
 ///             return Box::pin(async move {false});
 ///         }
 ///
@@ -49,7 +49,7 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 pub trait Resolver: Unpin {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
-    /// Returning `true` will result in a reconnect being attempted via `<T as TetherIo>::reconnect`,
+    /// Returning `true` will result in a reconnect being attempted via `<T as Io>::reconnect`,
     /// returning `false` will result in the error being returned from the originating call.
     ///
     /// # Note
@@ -59,6 +59,16 @@ pub trait Resolver: Unpin {
     /// in this function to determine whether to attempt to reconnect.
     ///
     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool>;
+
+    /// Invoked within [`Tether::connect`] if the initial connection attempt fails
+    fn unreachable(&mut self, context: &Context, state: &State) -> PinFut<bool> {
+        self.disconnected(context, state)
+    }
+
+    /// Invoked within [`Tether::connect`] if the initial connection attempt succeeds
+    fn established(&mut self, context: &Context) -> PinFut<()> {
+        self.reconnected(context)
+    }
 
     /// Invoked by Tether when the underlying I/O connection has been re-established
     fn reconnected(&mut self, _context: &Context) -> PinFut<()> {
@@ -192,17 +202,22 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     /// # Note
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
-    pub fn new(inner: T, initializer: I, resolver: R) -> Self {
+    pub fn new(inner: T, initializer: I, resolver: R, context: Context) -> Self {
         Self {
             state: Default::default(),
             inner: TetherInner {
-                context: Default::default(),
+                context,
                 initializer,
                 io: inner,
                 resolver,
                 state: State::Eof,
             },
         }
+    }
+
+    fn reconnect(&mut self) {
+        self.state = StateMachine::Connected;
+        self.inner.context.reset();
     }
 
     /// Returns a reference to the initializer
@@ -227,14 +242,30 @@ where
     T: Io<I>,
     I: Clone,
 {
-    /// Connect to the I/O source
-    ///
-    /// Invokes [`TetherIo::connect`] to establish the connection, the same method which is called
-    /// when Tether attempts to reconnect.
-    pub async fn connect(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
-        let inner = T::connect(initializer.clone()).await?;
+    /// Connect to the I/O source, retrying on a failure.
+    pub async fn connect(initializer: I, mut resolver: R) -> Result<Self, std::io::Error> {
+        let mut context = Context::default();
 
-        Ok(Self::new(inner, initializer, resolver))
+        loop {
+            let state = match T::connect(initializer.clone()).await {
+                Ok(io) => {
+                    resolver.established(&context).await;
+                    context.reset();
+                    return Ok(Self::new(io, initializer, resolver, context));
+                }
+                Err(error) => State::Err(error),
+            };
+
+            context.increment_attempts();
+
+            if !resolver.unreachable(&context, &state).await {
+                let State::Err(error) = state else {
+                    unreachable!("state is immutable and established as Err above");
+                };
+
+                return Err(error);
+            }
+        }
     }
 }
 
@@ -249,21 +280,37 @@ enum StateMachine<T> {
 
 /// Contains metrics about the underlying connection
 ///
-/// Passed to the [`TetherResolver`], with each call to `disconnect`.
+/// Passed to the [`Resolver`], with each call to `disconnect`.
 ///
 /// Currently tracks the number of reconnect attempts, but in the future may be expanded to include
 /// additional metrics.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Context {
-    reconnection_attempts: usize,
+    total_attempts: usize,
+    current_attempts: usize,
 }
 
 impl Context {
-    /// The number of times a reconnect has been attempted.
+    /// The total number of times a reconnect has been attempted.
     ///
-    /// The first time [`TetherResolver::disconnected`] is invoked this will return `1`.
-    pub fn reconnect_count(&self) -> usize {
-        self.reconnection_attempts
+    /// The first time [`Resolver::disconnected`] is invoked this will return `1`.
+    pub fn total_reconnect_attempts(&self) -> usize {
+        self.total_attempts
+    }
+
+    fn increment_attempts(&mut self) {
+        self.current_attempts += 1;
+        self.total_attempts += 1;
+    }
+
+    fn reset(&mut self) {
+        self.current_attempts = 0;
+    }
+
+    /// The number of reconnect attempts since the last successful connection. Reset each time
+    /// the connection is re-established
+    pub fn current_reconnect_attempts(&self) -> usize {
+        self.current_attempts
     }
 }
 
