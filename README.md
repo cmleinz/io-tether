@@ -28,43 +28,40 @@ to implement `TetherResolver` on their own types. This allows them to inject
 arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
-use io_tether::{TetherResolver, Context, State, Tether};
+use std::time::Duration;
+use io_tether::{TetherResolver, Context, State, Tether, PinFut};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
 pub struct CallbackResolver {
-    channel: mpsc::Sender<String>,
+    channel: mpsc::Sender<()>,
 }
 
 impl TetherResolver for CallbackResolver {
-    type Error = std::io::Error;
-
-    async fn disconnected(
+    fn disconnected(
         &mut self,
         context: &Context,
-        state: &State<Self::Error>,
-    ) -> bool {
-        match state {
-            State::Eof => false, // No reconnection attempt will be made
-            State::Err(error) => {
-                let error = error.to_string();
-                self.channel.send(error).await.unwrap();
-                true
-            }
-        }
+        state: &State,
+    ) -> PinFut<bool> {
+
+        let sender = self.channel.clone();
+	    Box::pin(async move {
+	        tokio::time::sleep(Duration::from_millis(500)).await;
+	        sender.send(()).await.unwrap();
+	        true
+		})
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut buf = Vec::new();
-    let (channel, rx) = mpsc::channel(10);
+    let (channel, mut rx) = mpsc::channel(10);
 
     let listener = tokio::net::TcpListener::bind("localhost:8080").await?;
     tokio::spawn(async move {
         loop {
             let (mut stream, _addr) = listener.accept().await.unwrap();
-            stream.write_all(b"foo-bar").await.unwrap();
+            stream.write_all(b"foobar").await.unwrap();
             stream.shutdown().await.unwrap();
         }
     });
@@ -72,12 +69,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resolver = CallbackResolver {
         channel,
     };
-    let mut tether = Tether::<_, TcpStream, _>::connect("localhost:8080", resolver)
-        .await?;
 
-    tether.read_to_end(&mut buf).await?;
+	let handle = tokio::spawn(async move {
+        let mut tether = Tether::<_, TcpStream, _>::connect(String::from("localhost:8080"), resolver)
+            .await
+			.unwrap();
+
+		let mut buf = [0; 12];
+        tether.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"foobarfoobar");
+	});
     
-    assert_eq!(&buf, b"foo-bar");
+	assert!(rx.recv().await.is_some());
+	handle.await?;
 
     Ok(())
 }

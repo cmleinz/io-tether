@@ -32,16 +32,16 @@ where
 
                     match result {
                         Ok(0) => {
-                            *me.state.borrow_mut() = State::Eof;
-                            let fut = me.disconnected_fut();
-                            let fut = fut.into_pin();
+                            me.state = State::Eof;
+                            let (res, ctx, state) = me.as_parts();
+                            let fut = res.disconnected(ctx, state);
                             me.futs = FutState::Disconnected(fut);
                         }
                         Ok(_) => return Poll::Ready(Ok(())),
                         Err(error) => {
-                            *me.state.borrow_mut() = State::Err(error);
-                            let fut = me.disconnected_fut();
-                            let fut = fut.into_pin();
+                            me.state = State::Err(error);
+                            let (res, ctx, state) = me.as_parts();
+                            let fut = res.disconnected(ctx, state);
                             me.futs = FutState::Disconnected(fut);
                         }
                     }
@@ -54,23 +54,23 @@ where
                         let reconnect_fut = Box::pin(T::reconnect(init));
                         me.futs = FutState::Reconnecting(reconnect_fut);
                     } else {
-                        let err = &*me.state.borrow();
+                        let err = &me.state;
                         let err = err.into();
                         return Poll::Ready(Err(err));
                     }
                 }
                 FutState::Reconnecting(ref mut fut) => {
                     let result = ready!(fut.as_mut().poll(cx));
-                    me.context.borrow_mut().reconnection_attempts += 1;
+                    me.context.reconnection_attempts += 1;
 
                     match result {
                         Ok(new_thing) => {
                             me.inner = new_thing;
-                            let fut = me.reconnected_fut();
-                            let fut = fut.into_pin();
+                            let (res, ctx, _state) = me.as_parts();
+                            let fut = res.reconnected(ctx);
                             me.futs = FutState::Reconnected(fut);
                         }
-                        Err(error) => *me.state.borrow_mut() = State::Err(error),
+                        Err(error) => me.state = State::Err(error),
                     }
                 }
                 FutState::Reconnected(ref mut fut) => {
@@ -85,6 +85,7 @@ where
 #[cfg(feature = "net")]
 mod net {
     use super::*;
+
     mod tcp {
         use super::*;
 

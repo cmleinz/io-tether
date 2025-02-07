@@ -1,7 +1,9 @@
 #![doc = include_str!("../README.md")]
-use std::{cell::RefCell, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin};
 
 mod implementations;
+
+pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 
 /// Represents a type which drives reconnects
 ///
@@ -15,21 +17,21 @@ mod implementations;
 /// A very simple implementation may look something like the following:
 ///
 /// ```ignore
-/// # use io_tether::{Context, State, TetherResolver};
+/// # use io_tether::{Context, State, TetherResolver, PinFut};
 /// pub struct RetryResolver;
 ///
 /// impl TetherResolver for RetryResolver {
-///     type Error = std::io::Error;
-///
-///     async fn disconnected(&mut self, context: &Context, state: &State<Self::Error>) -> bool {
+///     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool> {
 ///         tracing::warn!(?state, "Disconnected from server");
-
+///
 ///         if context.reconnect_count() >= 5 {
-///             return false;
+///             return Box::pin(async move {false});
 ///         }
 ///
-///         tokio::time::sleep(Duration::from_secs(10)).await;
-///         true
+///         Box::pin(async move {
+///             tokio::time::sleep(Duration::from_secs(10)).await;
+///             true
+///         })
 ///     }
 /// }
 /// ```
@@ -45,14 +47,10 @@ pub trait TetherResolver: Unpin {
     /// The [`State`] will describe the type of the underlying error. It can either be `State::Eof`,
     /// in which case the end of file was reached, or an error. This information can be leveraged
     /// in this function to determine whether to attempt to reconnect.
-    fn disconnected(
-        &mut self,
-        context: &Context,
-        state: &State,
-    ) -> impl Future<Output = bool> + Send;
+    fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool>;
 
-    fn reconnected(&mut self, _context: &Context) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
+    fn reconnected(&mut self, _context: &Context) -> PinFut<()> {
+        Box::pin(std::future::ready(()))
     }
 }
 
@@ -71,46 +69,6 @@ pub trait TetherIo<T>: Sized + Unpin {
         initializer: T,
     ) -> impl Future<Output = Result<Self, std::io::Error>> + 'static + Send {
         Self::connect(initializer)
-    }
-}
-
-struct DisconnectedFut<T: TetherResolver> {
-    context: Arc<RefCell<Context>>,
-    state: Arc<RefCell<State>>,
-    resolver: Arc<RefCell<T>>,
-}
-
-impl<T> DisconnectedFut<T>
-where
-    T: 'static + TetherResolver,
-{
-    fn into_pin(self) -> Pin<Box<dyn Future<Output = bool>>> {
-        Box::pin(async move {
-            let resolver = &mut *self.resolver.borrow_mut();
-            let context = &*self.context.borrow();
-            let state = &*self.state.borrow();
-
-            resolver.disconnected(context, state).await
-        })
-    }
-}
-
-struct ReconnectedFut<T: TetherResolver> {
-    context: Arc<RefCell<Context>>,
-    resolver: Arc<RefCell<T>>,
-}
-
-impl<T> ReconnectedFut<T>
-where
-    T: 'static + TetherResolver,
-{
-    fn into_pin(self) -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(async move {
-            let resolver = &mut *self.resolver.borrow_mut();
-            let context = &*self.context.borrow();
-
-            resolver.reconnected(context).await
-        })
     }
 }
 
@@ -160,11 +118,11 @@ impl From<&State> for std::io::Error {
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
 pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
-    context: Arc<RefCell<Context>>,
+    context: Context,
     initializer: I,
     inner: T,
-    resolver: Arc<RefCell<R>>,
-    state: Arc<RefCell<State>>,
+    resolver: R,
+    state: State,
     futs: FutState<T>,
 }
 
@@ -179,25 +137,14 @@ impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
             context: Default::default(),
             initializer,
             inner,
-            resolver: Arc::new(RefCell::new(resolver)),
+            resolver,
             futs: Default::default(),
-            state: Arc::new(RefCell::new(State::Eof)),
+            state: State::Eof,
         }
     }
 
-    fn disconnected_fut(&self) -> DisconnectedFut<R> {
-        DisconnectedFut {
-            context: self.context.clone(),
-            state: self.state.clone(),
-            resolver: self.resolver.clone(),
-        }
-    }
-
-    fn reconnected_fut(&self) -> ReconnectedFut<R> {
-        ReconnectedFut {
-            context: self.context.clone(),
-            resolver: self.resolver.clone(),
-        }
+    pub(crate) fn as_parts(&mut self) -> (&mut R, &Context, &State) {
+        (&mut self.resolver, &self.context, &self.state)
     }
 
     /// Returns a reference to the initializer
@@ -237,9 +184,9 @@ where
 enum FutState<T> {
     #[default]
     Connected,
-    Disconnected(Pin<Box<dyn Future<Output = bool>>>),
-    Reconnecting(Pin<Box<dyn Future<Output = Result<T, std::io::Error>>>>),
-    Reconnected(Pin<Box<dyn Future<Output = ()>>>),
+    Disconnected(PinFut<bool>),
+    Reconnecting(PinFut<Result<T, std::io::Error>>),
+    Reconnected(PinFut<()>),
 }
 
 /// Contains metrics about the underlying connection
