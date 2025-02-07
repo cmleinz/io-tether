@@ -118,12 +118,30 @@ impl From<&State> for std::io::Error {
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
 pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
+    futs: FutState<T>,
+    inner: TetherInner<I, T, R>,
+}
+
+/// The inner type for tether.
+///
+/// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
+/// larger futs state machine
+struct TetherInner<I, T: TetherIo<I>, R: TetherResolver> {
     context: Context,
     initializer: I,
     inner: T,
     resolver: R,
     state: State,
-    futs: FutState<T>,
+}
+
+impl<I, T: TetherIo<I>, R: TetherResolver> TetherInner<I, T, R> {
+    fn disconnected(&mut self) -> PinFut<bool> {
+        self.resolver.disconnected(&self.context, &self.state)
+    }
+
+    fn reconnected(&mut self) -> PinFut<()> {
+        self.resolver.reconnected(&self.context)
+    }
 }
 
 impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
@@ -134,32 +152,30 @@ impl<I, T: TetherIo<I>, R: TetherResolver> Tether<I, T, R> {
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
     pub fn new(inner: T, initializer: I, resolver: R) -> Self {
         Self {
-            context: Default::default(),
-            initializer,
-            inner,
-            resolver,
             futs: Default::default(),
-            state: State::Eof,
+            inner: TetherInner {
+                context: Default::default(),
+                initializer,
+                inner,
+                resolver,
+                state: State::Eof,
+            },
         }
-    }
-
-    pub(crate) fn as_parts(&mut self) -> (&mut R, &Context, &State) {
-        (&mut self.resolver, &self.context, &self.state)
     }
 
     /// Returns a reference to the initializer
     pub fn get_initializer(&self) -> &I {
-        &self.initializer
+        &self.inner.initializer
     }
 
     /// Returns a mutable reference to the initializer
     pub fn get_initializer_mut(&mut self) -> &mut I {
-        &mut self.initializer
+        &mut self.inner.initializer
     }
 
     /// Consume the Tether, and return the underlying I/O type
     pub fn into_inner(self) -> T {
-        self.inner
+        self.inner.inner
     }
 }
 
