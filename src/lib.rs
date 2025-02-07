@@ -12,17 +12,28 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 /// [`tokio::time::sleep`](https://docs.rs/tokio/latest/tokio/time/fn.sleep.html) from within the
 /// body, work.
 ///
+/// # Return Type
+///
+/// The return types of the methods are [`PinFut`]. This has the requirement that the returned
+/// future be 'static (cannot hold references to self, or any of the arguments). However, you are
+/// still free to mutate data outside of the returned future.
+///
+/// Additionally, this method is invoked each time the I/O fails to establish a connection so
+/// writing futures which do not reference their environment is a little easier than it may seem.
+///
 /// # Example
 ///
 /// A very simple implementation may look something like the following:
 ///
-/// ```ignore
-/// # use io_tether::{Context, State, TetherResolver, PinFut};
-/// pub struct RetryResolver;
+/// ```no_run
+/// # use std::time::Duration;
+/// # use io_tether::{Context, State, Resolver, PinFut};
+/// pub struct RetryResolver(bool);
 ///
-/// impl TetherResolver for RetryResolver {
+/// impl Resolver for RetryResolver {
 ///     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool> {
-///         tracing::warn!(?state, "Disconnected from server");
+///         println!("WARN: Disconnected from server {:?}", state);
+///         self.0 = true;
 ///
 ///         if context.reconnect_count() >= 5 {
 ///             return Box::pin(async move {false});
@@ -35,7 +46,6 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///     }
 /// }
 /// ```
-// TODO: Remove the Unpin restriction
 pub trait Resolver: Unpin {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
@@ -47,8 +57,10 @@ pub trait Resolver: Unpin {
     /// The [`State`] will describe the type of the underlying error. It can either be `State::Eof`,
     /// in which case the end of file was reached, or an error. This information can be leveraged
     /// in this function to determine whether to attempt to reconnect.
+    ///
     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool>;
 
+    /// Invoked by Tether when the underlying I/O connection has been re-established
     fn reconnected(&mut self, _context: &Context) -> PinFut<()> {
         Box::pin(std::future::ready(()))
     }
@@ -75,6 +87,7 @@ pub trait Io<T>: Sized + Unpin {
 /// The underlying cause of the I/O disconnect
 ///
 /// Currently this is either an error, or an 'end of file'.
+#[derive(Debug)]
 pub enum State {
     /// End of File
     ///
