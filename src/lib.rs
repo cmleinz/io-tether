@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-use std::{future::Future, pin::Pin};
+use std::{future::Future, io::ErrorKind, pin::Pin};
 
 mod implementations;
 
@@ -86,10 +86,39 @@ pub enum State {
     Err(std::io::Error),
 }
 
+impl State {
+    /// A convenience function which returns whether the original error is capable of being retried
+    pub fn retryable(&self) -> bool {
+        use std::io::ErrorKind as Kind;
+
+        match self {
+            State::Eof => true,
+            State::Err(error) => matches!(
+                error.kind(),
+                Kind::NotFound
+                    | Kind::PermissionDenied
+                    | Kind::ConnectionRefused
+                    | Kind::ConnectionAborted
+                    | Kind::ConnectionReset
+                    | Kind::NotConnected
+                    | Kind::AlreadyExists
+                    | Kind::HostUnreachable
+                    | Kind::AddrNotAvailable
+                    | Kind::NetworkDown
+                    | Kind::BrokenPipe
+                    | Kind::TimedOut
+                    | Kind::UnexpectedEof
+                    | Kind::NetworkUnreachable
+                    | Kind::AddrInUse
+            ),
+        }
+    }
+}
+
 impl From<&State> for std::io::Error {
     fn from(value: &State) -> Self {
         match value {
-            State::Eof => std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Eof error"),
+            State::Eof => std::io::Error::new(ErrorKind::UnexpectedEof, "Eof error"),
             State::Err(error) => {
                 // TODO: This is pretty hacky there's probably a better way
                 let kind = error.kind();
@@ -117,7 +146,7 @@ impl From<&State> for std::io::Error {
 /// in the future there may be reason to add unsafe code which cannot be guaranteed if outside
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
-pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
+pub struct Tether<I, T: TetherIo<I>, R> {
     futs: FutState<T>,
     inner: TetherInner<I, T, R>,
 }
@@ -126,7 +155,7 @@ pub struct Tether<I, T: TetherIo<I>, R: TetherResolver> {
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
 /// larger futs state machine
-struct TetherInner<I, T: TetherIo<I>, R: TetherResolver> {
+struct TetherInner<I, T: TetherIo<I>, R> {
     context: Context,
     initializer: I,
     inner: T,
