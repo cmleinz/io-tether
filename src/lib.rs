@@ -139,18 +139,17 @@ impl State {
             ),
         }
     }
+
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::Eof)
+    }
 }
 
-impl From<&State> for std::io::Error {
-    fn from(value: &State) -> Self {
+impl From<State> for std::io::Error {
+    fn from(value: State) -> Self {
         match value {
             State::Eof => std::io::Error::new(ErrorKind::UnexpectedEof, "Eof error"),
-            State::Err(error) => {
-                // TODO: This is pretty hacky there's probably a better way
-                let kind = error.kind();
-                let error = error.to_string();
-                std::io::Error::new(kind, error)
-            }
+            State::Err(error) => error,
         }
     }
 }

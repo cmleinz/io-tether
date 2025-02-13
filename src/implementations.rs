@@ -27,7 +27,7 @@ macro_rules! connected {
                         let reconnect_fut = Box::pin(T::reconnect(init));
                         $me.state = StateMachine::Reconnecting(reconnect_fut);
                     } else {
-                        let err = &$me.inner.state;
+                        let err = $me.inner.state.take();
                         let err = err.into();
                         return Poll::Ready(Err(err));
                     }
