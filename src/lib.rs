@@ -61,6 +61,9 @@ pub trait Resolver: Unpin {
     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
+    ///
+    /// As with [`Self::disconnected`] the returned boolean determines whether the initial
+    /// connection attempt is retried
     fn unreachable(&mut self, context: &Context, state: &State) -> PinFut<bool> {
         self.disconnected(context, state)
     }
@@ -70,7 +73,8 @@ pub trait Resolver: Unpin {
         self.reconnected(context)
     }
 
-    /// Invoked by Tether when the underlying I/O connection has been re-established
+    /// Invoked by Tether whenever the connection to the underlying I/O source has been
+    /// re-established
     fn reconnected(&mut self, _context: &Context) -> PinFut<()> {
         Box::pin(std::future::ready(()))
     }
@@ -99,11 +103,10 @@ pub trait Io<T>: Sized + Unpin {
 /// Currently this is either an error, or an 'end of file'.
 #[derive(Debug)]
 pub enum State {
-    /// End of File
+    /// Represents the end of the file for the underlying io
     ///
-    /// # Note
-    ///
-    /// This is also emitted when the other half of a TCP connection is closed.
+    /// This can occur when the end of a file is read from the filesystem, when the remote socket on
+    /// a TCP connection is closed, etc. Generally it indicates a successful end of the connection
     Eof,
     /// An I/O Error occurred
     Err(std::io::Error),
@@ -293,7 +296,8 @@ pub struct Context {
 impl Context {
     /// The total number of times a reconnect has been attempted.
     ///
-    /// The first time [`Resolver::disconnected`] is invoked this will return `1`.
+    /// The first time [`Resolver::disconnected`] or [`Resolver::unreachable`] is invoked this will
+    /// return `1`.
     pub fn total_reconnect_attempts(&self) -> usize {
         self.total_attempts
     }
@@ -308,7 +312,7 @@ impl Context {
     }
 
     /// The number of reconnect attempts since the last successful connection. Reset each time
-    /// the connection is re-established
+    /// the connection is established
     pub fn current_reconnect_attempts(&self) -> usize {
         self.current_attempts
     }
