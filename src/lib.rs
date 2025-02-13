@@ -210,7 +210,11 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     /// # Note
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
-    pub fn new(inner: T, initializer: I, resolver: R, context: Context) -> Self {
+    pub fn new(inner: T, initializer: I, resolver: R) -> Self {
+        Self::new_with_context(inner, initializer, resolver, Context::default())
+    }
+
+    fn new_with_context(inner: T, initializer: I, resolver: R, context: Context) -> Self {
         Self {
             state: Default::default(),
             inner: TetherInner {
@@ -259,7 +263,7 @@ where
                 Ok(io) => {
                     resolver.established(&context).await;
                     context.reset();
-                    return Ok(Self::new(io, initializer, resolver, context));
+                    return Ok(Self::new_with_context(io, initializer, resolver, context));
                 }
                 Err(error) => Reason::Err(error),
             };
