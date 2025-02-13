@@ -7,7 +7,7 @@
 [![Crates.io](https://img.shields.io/crates/v/io-tether.svg)](https://crates.io/crates/io-tether)
 [![Documentation](https://docs.rs/io-tether/badge.svg)](https://docs.rs/io-tether/)
 
-Traits for defining I/O objects which automatically reconnect upon failure.
+A small library for defining I/O types which reconnect on errors. 
 
 This project is similar in scope to
 [stubborn-io](https://github.com/craftytrickster/stubborn-io), but provides
@@ -44,11 +44,11 @@ impl Resolver for CallbackResolver {
     ) -> PinFut<bool> {
 
         let sender = self.channel.clone();
-	    Box::pin(async move {
-	        tokio::time::sleep(Duration::from_millis(500)).await;
-	        sender.send(()).await.unwrap();
-	        true
-		})
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            sender.send(()).await.unwrap();
+            true
+        })
     }
 }
 
@@ -69,18 +69,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel,
     };
 
-	let handle = tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut tether = Tether::<_, TcpStream, _>::connect(String::from("localhost:8080"), resolver)
             .await
-			.unwrap();
+            .unwrap();
 
-		let mut buf = [0; 12];
+        let mut buf = [0; 12];
         tether.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"foobarfoobar");
-	});
+    });
     
-	assert!(rx.recv().await.is_some());
-	handle.await?;
+    assert!(rx.recv().await.is_some());
+    handle.await?;
 
     Ok(())
 }
