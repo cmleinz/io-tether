@@ -303,10 +303,16 @@ pub struct Context {
 }
 
 impl Context {
+    /// The number of reconnect attempts since the last successful connection. Reset each time
+    /// the connection is established
+    pub fn current_reconnect_attempts(&self) -> usize {
+        self.current_attempts
+    }
+
     /// The total number of times a reconnect has been attempted.
     ///
     /// The first time [`Resolver::disconnected`] or [`Resolver::unreachable`] is invoked this will
-    /// return `1`.
+    /// return `0`, each subsequent time it will be incremented by 1.
     pub fn total_reconnect_attempts(&self) -> usize {
         self.total_attempts
     }
@@ -318,12 +324,6 @@ impl Context {
 
     fn reset(&mut self) {
         self.current_attempts = 0;
-    }
-
-    /// The number of reconnect attempts since the last successful connection. Reset each time
-    /// the connection is established
-    pub fn current_reconnect_attempts(&self) -> usize {
-        self.current_attempts
     }
 }
 
@@ -338,4 +338,43 @@ pub(crate) mod ready {
     }
 
     pub(crate) use ready;
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    struct Once;
+
+    impl Resolver for Once {
+        fn disconnected(&mut self, context: &Context, _state: &Reason) -> PinFut<bool> {
+            let retry = context.total_reconnect_attempts() < 1;
+
+            Box::pin(async move { retry })
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnect_is_retried() {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut connections = 0;
+            loop {
+                let (mut stream, _addr) = listener.accept().await.unwrap();
+                stream.write_u8(connections).await.unwrap();
+                connections += 1;
+            }
+        });
+
+        let mut stream = Tether::connect_tcp(addr, Once).await.unwrap();
+        let mut buf = Vec::new();
+        assert!(stream.read_to_end(&mut buf).await.is_err());
+        assert_eq!(buf.as_slice(), &[0, 1])
+    }
 }
