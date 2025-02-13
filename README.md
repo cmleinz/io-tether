@@ -28,7 +28,7 @@ arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
 use std::time::Duration;
-use io_tether::{Resolver, Context, State, Tether, PinFut};
+use io_tether::{Resolver, Context, Reason, Tether, PinFut};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
@@ -40,7 +40,7 @@ impl Resolver for CallbackResolver {
     fn disconnected(
         &mut self,
         context: &Context,
-        state: &State,
+        state: &Reason,
     ) -> PinFut<bool> {
 
         let sender = self.channel.clone();

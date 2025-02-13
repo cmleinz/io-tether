@@ -3,6 +3,7 @@ use std::{future::Future, io::ErrorKind, pin::Pin};
 
 mod implementations;
 
+/// A dynamically dispatched static future
 pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 
 /// Represents a type which drives reconnects
@@ -11,6 +12,10 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 /// disconnects, calling asynchronous functions like
 /// [`tokio::time::sleep`](https://docs.rs/tokio/latest/tokio/time/fn.sleep.html) from within the
 /// body, work.
+///
+/// # Unpin
+///
+/// Since the method provides `&mut Self`, Self must be [`Unpin`]
 ///
 /// # Return Type
 ///
@@ -27,12 +32,12 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///
 /// ```no_run
 /// # use std::time::Duration;
-/// # use io_tether::{Context, State, Resolver, PinFut};
+/// # use io_tether::{Context, Reason, Resolver, PinFut};
 /// pub struct RetryResolver(bool);
 ///
 /// impl Resolver for RetryResolver {
-///     fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool> {
-///         println!("WARN: Disconnected from server {:?}", state);
+///     fn disconnected(&mut self, context: &Context, reason: &Reason) -> PinFut<bool> {
+///         println!("WARN: Disconnected from server {:?}", reason);
 ///         self.0 = true;
 ///
 ///         if context.current_reconnect_attempts() >= 5 || context.total_reconnect_attempts() >= 50 {
@@ -58,13 +63,13 @@ pub trait Resolver: Unpin {
     /// in which case the end of file was reached, or an error. This information can be leveraged
     /// in this function to determine whether to attempt to reconnect.
     ///
-    fn disconnected(&mut self, context: &Context, state: &State) -> PinFut<bool>;
+    fn disconnected(&mut self, context: &Context, state: &Reason) -> PinFut<bool>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
     ///
     /// As with [`Self::disconnected`] the returned boolean determines whether the initial
     /// connection attempt is retried
-    fn unreachable(&mut self, context: &Context, state: &State) -> PinFut<bool> {
+    fn unreachable(&mut self, context: &Context, state: &Reason) -> PinFut<bool> {
         self.disconnected(context, state)
     }
 
@@ -98,11 +103,12 @@ pub trait Io<T>: Sized + Unpin {
     }
 }
 
-/// The underlying cause of the I/O disconnect
+/// Represents the reason the [`Resolver`] is invoked
 ///
 /// Currently this is either an error, or an 'end of file'.
 #[derive(Debug)]
-pub enum State {
+#[non_exhaustive]
+pub enum Reason {
     /// Represents the end of the file for the underlying io
     ///
     /// This can occur when the end of a file is read from the filesystem, when the remote socket on
@@ -112,14 +118,14 @@ pub enum State {
     Err(std::io::Error),
 }
 
-impl State {
+impl Reason {
     /// A convenience function which returns whether the original error is capable of being retried
     pub fn retryable(&self) -> bool {
         use std::io::ErrorKind as Kind;
 
         match self {
-            State::Eof => true,
-            State::Err(error) => matches!(
+            Reason::Eof => true,
+            Reason::Err(error) => matches!(
                 error.kind(),
                 Kind::NotFound
                     | Kind::PermissionDenied
@@ -145,11 +151,11 @@ impl State {
     }
 }
 
-impl From<State> for std::io::Error {
-    fn from(value: State) -> Self {
+impl From<Reason> for std::io::Error {
+    fn from(value: Reason) -> Self {
         match value {
-            State::Eof => std::io::Error::new(ErrorKind::UnexpectedEof, "Eof error"),
-            State::Err(error) => error,
+            Reason::Eof => std::io::Error::new(ErrorKind::UnexpectedEof, "Eof error"),
+            Reason::Err(error) => error,
         }
     }
 }
@@ -185,12 +191,12 @@ struct TetherInner<I, T: Io<I>, R> {
     initializer: I,
     io: T,
     resolver: R,
-    state: State,
+    reason: Reason,
 }
 
 impl<I, T: Io<I>, R: Resolver> TetherInner<I, T, R> {
     fn disconnected(&mut self) -> PinFut<bool> {
-        self.resolver.disconnected(&self.context, &self.state)
+        self.resolver.disconnected(&self.context, &self.reason)
     }
 
     fn reconnected(&mut self) -> PinFut<()> {
@@ -212,7 +218,7 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
                 initializer,
                 io: inner,
                 resolver,
-                state: State::Eof,
+                reason: Reason::Eof,
             },
         }
     }
@@ -255,13 +261,13 @@ where
                     context.reset();
                     return Ok(Self::new(io, initializer, resolver, context));
                 }
-                Err(error) => State::Err(error),
+                Err(error) => Reason::Err(error),
             };
 
             context.increment_attempts();
 
             if !resolver.unreachable(&context, &state).await {
-                let State::Err(error) = state else {
+                let Reason::Err(error) = state else {
                     unreachable!("state is immutable and established as Err above");
                 };
 

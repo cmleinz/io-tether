@@ -2,7 +2,7 @@ use std::{ops::ControlFlow, pin::Pin, task::Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{State, StateMachine, TetherInner};
+use crate::{Reason, StateMachine, TetherInner};
 
 use super::{ready::ready, Io, Resolver, Tether};
 
@@ -27,8 +27,7 @@ macro_rules! connected {
                         let reconnect_fut = Box::pin(T::reconnect(init));
                         $me.state = StateMachine::Reconnecting(reconnect_fut);
                     } else {
-                        let err = $me.inner.state.take();
-                        let err = err.into();
+                        let err = $me.inner.reason.take().into();
                         return Poll::Ready(Err(err));
                     }
                 }
@@ -42,7 +41,7 @@ macro_rules! connected {
                             let fut = $me.inner.reconnected();
                             $me.state = StateMachine::Reconnected(fut);
                         }
-                        Err(error) => $me.inner.state = State::Err(error),
+                        Err(error) => $me.inner.reason = Reason::Err(error),
                     }
                 }
                 StateMachine::Reconnected(ref mut fut) => {
@@ -77,13 +76,13 @@ where
 
         match result {
             Ok(0) => {
-                me.state = State::Eof;
+                me.reason = Reason::Eof;
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.state = State::Err(error);
+                me.reason = Reason::Err(error);
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
@@ -128,13 +127,13 @@ where
 
         match result {
             Ok(0) => {
-                me.state = State::Eof;
+                me.reason = Reason::Eof;
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
             Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
             Err(error) => {
-                me.state = State::Err(error);
+                me.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
@@ -155,7 +154,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.state = State::Err(error);
+                me.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
@@ -176,7 +175,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.state = State::Err(error);
+                me.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
             }
