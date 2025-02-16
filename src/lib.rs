@@ -2,6 +2,10 @@
 use std::{future::Future, io::ErrorKind, pin::Pin};
 
 mod implementations;
+#[cfg(feature = "net")]
+pub mod tcp;
+#[cfg(all(feature = "net", target_family = "unix"))]
+pub mod unix;
 
 /// A dynamically dispatched static future
 pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
@@ -59,10 +63,9 @@ pub trait Resolver: Unpin {
     ///
     /// # Note
     ///
-    /// The [`State`] will describe the type of the underlying error. It can either be `State::Eof`,
-    /// in which case the end of file was reached, or an error. This information can be leveraged
-    /// in this function to determine whether to attempt to reconnect.
-    ///
+    /// The [`Reason`] will describe the type of the underlying error. It can either be
+    /// `State::Eof`, in which case the end of file was reached, or an error. This information can
+    /// be leveraged in this function to determine whether to attempt to reconnect.
     fn disconnected(&mut self, context: &Context, state: &Reason) -> PinFut<bool>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
@@ -90,16 +93,14 @@ pub trait Resolver: Unpin {
 /// This trait is implemented for a number of types in the library, with the implementations placed
 /// behind feature flags
 pub trait Io<T>: Sized + Unpin {
+    type Output: Unpin;
+
     /// Initializes the connection to the I/O source
-    fn connect(
-        initializer: T,
-    ) -> impl Future<Output = Result<Self, std::io::Error>> + 'static + Send;
+    fn connect(&mut self, initializer: T) -> PinFut<Result<Self::Output, std::io::Error>>;
 
     /// Re-establishes the connection to the I/O source
-    fn reconnect(
-        initializer: T,
-    ) -> impl Future<Output = Result<Self, std::io::Error>> + 'static + Send {
-        Self::connect(initializer)
+    fn reconnect(&mut self, initializer: T) -> PinFut<Result<Self::Output, std::io::Error>> {
+        self.connect(initializer)
     }
 }
 
@@ -178,7 +179,7 @@ impl From<Reason> for std::io::Error {
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
 pub struct Tether<I, T: Io<I>, R> {
-    state: StateMachine<T>,
+    state: StateMachine<T::Output>,
     inner: TetherInner<I, T, R>,
 }
 
@@ -189,7 +190,8 @@ pub struct Tether<I, T: Io<I>, R> {
 struct TetherInner<I, T: Io<I>, R> {
     context: Context,
     initializer: I,
-    io: T,
+    connector: T,
+    io: T::Output,
     resolver: R,
     reason: Reason,
 }
@@ -210,11 +212,17 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     /// # Note
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
-    pub fn new(inner: T, initializer: I, resolver: R) -> Self {
-        Self::new_with_context(inner, initializer, resolver, Context::default())
+    pub fn new(connector: T, inner: T::Output, initializer: I, resolver: R) -> Self {
+        Self::new_with_context(connector, inner, initializer, resolver, Context::default())
     }
 
-    fn new_with_context(inner: T, initializer: I, resolver: R, context: Context) -> Self {
+    fn new_with_context(
+        connector: T,
+        inner: T::Output,
+        initializer: I,
+        resolver: R,
+        context: Context,
+    ) -> Self {
         Self {
             state: Default::default(),
             inner: TetherInner {
@@ -223,6 +231,7 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
                 io: inner,
                 resolver,
                 reason: Reason::Eof,
+                connector,
             },
         }
     }
@@ -243,7 +252,7 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     }
 
     /// Consume the Tether, and return the underlying I/O type
-    pub fn into_inner(self) -> T {
+    pub fn into_inner(self) -> T::Output {
         self.inner.io
     }
 }
@@ -255,15 +264,25 @@ where
     I: Clone,
 {
     /// Connect to the I/O source, retrying on a failure.
-    pub async fn connect(initializer: I, mut resolver: R) -> Result<Self, std::io::Error> {
+    pub async fn connect(
+        mut connector: T,
+        initializer: I,
+        mut resolver: R,
+    ) -> Result<Self, std::io::Error> {
         let mut context = Context::default();
 
         loop {
-            let state = match T::connect(initializer.clone()).await {
+            let state = match connector.connect(initializer.clone()).await {
                 Ok(io) => {
                     resolver.established(&context).await;
                     context.reset();
-                    return Ok(Self::new_with_context(io, initializer, resolver, context));
+                    return Ok(Self::new_with_context(
+                        connector,
+                        io,
+                        initializer,
+                        resolver,
+                        context,
+                    ));
                 }
                 Err(error) => Reason::Err(error),
             };

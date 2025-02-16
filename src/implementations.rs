@@ -24,7 +24,7 @@ macro_rules! connected {
 
                     if retry {
                         let init = $me.inner.initializer.clone();
-                        let reconnect_fut = Box::pin(T::reconnect(init));
+                        let reconnect_fut = $me.inner.connector.reconnect(init);
                         $me.state = StateMachine::Reconnecting(reconnect_fut);
                     } else {
                         let err = $me.inner.reason.take().into();
@@ -55,7 +55,8 @@ macro_rules! connected {
 
 impl<I, T, R> TetherInner<I, T, R>
 where
-    T: AsyncRead + Io<I>,
+    T: Io<I>,
+    T::Output: AsyncRead,
     I: Unpin + Clone,
     R: 'static + Resolver,
 {
@@ -63,7 +64,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -92,7 +93,8 @@ where
 
 impl<I, T, R> AsyncRead for Tether<I, T, R>
 where
-    T: AsyncRead + Io<I>,
+    T: Io<I>,
+    T::Output: AsyncRead,
     I: Unpin + Clone,
     R: 'static + Resolver,
 {
@@ -109,7 +111,8 @@ where
 
 impl<I, T, R> TetherInner<I, T, R>
 where
-    T: AsyncWrite + Io<I>,
+    T: Io<I>,
+    T::Output: AsyncWrite,
     I: Unpin + Clone,
     R: 'static + Resolver,
 {
@@ -117,7 +120,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<ControlFlow<std::io::Result<usize>, StateMachine<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<usize>, StateMachine<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -143,7 +146,7 @@ where
     fn poll_flush_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -164,7 +167,7 @@ where
     fn poll_shutdown_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -185,7 +188,8 @@ where
 
 impl<I, T, R> AsyncWrite for Tether<I, T, R>
 where
-    T: AsyncWrite + Io<I>,
+    T: Io<I>,
+    T::Output: AsyncWrite,
     I: Unpin + Clone,
     R: 'static + Resolver,
 {
@@ -215,64 +219,5 @@ where
         let mut me = self.as_mut();
 
         connected!(me, poll_shutdown_inner, cx,);
-    }
-}
-
-#[cfg(feature = "net")]
-mod net {
-    use super::*;
-
-    mod tcp {
-        use super::*;
-
-        use tokio::net::{TcpStream, ToSocketAddrs};
-
-        impl<I, R> Tether<I, TcpStream, R>
-        where
-            R: Resolver,
-            I: 'static + ToSocketAddrs + Clone + Send + Sync,
-        {
-            pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
-                Self::connect(initializer, resolver).await
-            }
-        }
-
-        impl<T> Io<T> for TcpStream
-        where
-            T: 'static + ToSocketAddrs + Clone + Send + Sync,
-        {
-            async fn connect(initializer: T) -> Result<Self, std::io::Error> {
-                let addr = initializer.clone();
-                TcpStream::connect(addr).await
-            }
-        }
-    }
-
-    #[cfg(target_family = "unix")]
-    mod unix {
-        use super::*;
-
-        use std::path::Path;
-
-        use tokio::net::UnixStream;
-
-        impl<I, R> Tether<I, UnixStream, R>
-        where
-            R: Resolver,
-            I: 'static + AsRef<Path> + Clone + Send + Sync,
-        {
-            pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
-                Self::connect(initializer, resolver).await
-            }
-        }
-
-        impl<T> Io<T> for UnixStream
-        where
-            T: 'static + AsRef<Path> + Clone + Send + Sync,
-        {
-            async fn connect(initializer: T) -> Result<Self, std::io::Error> {
-                UnixStream::connect(initializer).await
-            }
-        }
     }
 }
