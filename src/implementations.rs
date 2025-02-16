@@ -2,7 +2,7 @@ use std::{ops::ControlFlow, pin::Pin, task::Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{Reason, StateMachine, TetherInner};
+use crate::{Reason, State, TetherInner};
 
 use super::{ready::ready, Io, Resolver, Tether};
 
@@ -10,7 +10,7 @@ macro_rules! connected {
     ($me:expr, $poll_method:ident, $cx:expr, $($args:expr),*) => {
         loop {
             match $me.state {
-                StateMachine::Connected => {
+                State::Connected => {
                     let new = Pin::new(&mut $me.inner);
                     let cont = ready!(new.$poll_method($cx, $($args),*));
 
@@ -19,19 +19,19 @@ macro_rules! connected {
                         ControlFlow::Break(val) => return Poll::Ready(val),
                     }
                 }
-                StateMachine::Disconnected(ref mut fut) => {
+                State::Disconnected(ref mut fut) => {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
                         let init = $me.inner.initializer.clone();
                         let reconnect_fut = $me.inner.connector.reconnect(init);
-                        $me.state = StateMachine::Reconnecting(reconnect_fut);
+                        $me.state = State::Reconnecting(reconnect_fut);
                     } else {
                         let err = $me.inner.reason.take().into();
                         return Poll::Ready(Err(err));
                     }
                 }
-                StateMachine::Reconnecting(ref mut fut) => {
+                State::Reconnecting(ref mut fut) => {
                     let result = ready!(fut.as_mut().poll($cx));
                     $me.inner.context.increment_attempts();
 
@@ -39,12 +39,12 @@ macro_rules! connected {
                         Ok(new_io) => {
                             $me.inner.io = new_io;
                             let fut = $me.inner.reconnected();
-                            $me.state = StateMachine::Reconnected(fut);
+                            $me.state = State::Reconnected(fut);
                         }
                         Err(error) => $me.inner.reason = Reason::Err(error),
                     }
                 }
-                StateMachine::Reconnected(ref mut fut) => {
+                State::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
                     $me.reconnect();
                 }
@@ -64,7 +64,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -79,13 +79,13 @@ where
             Ok(0) => {
                 me.reason = Reason::Eof;
                 let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
                 me.reason = Reason::Err(error);
                 let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
         }
     }
@@ -120,7 +120,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<ControlFlow<std::io::Result<usize>, StateMachine<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<usize>, State<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -132,13 +132,13 @@ where
             Ok(0) => {
                 me.reason = Reason::Eof;
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
             Err(error) => {
                 me.reason = Reason::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
         }
     }
@@ -146,7 +146,7 @@ where
     fn poll_flush_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -159,7 +159,7 @@ where
             Err(error) => {
                 me.reason = Reason::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
         }
     }
@@ -167,7 +167,7 @@ where
     fn poll_shutdown_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, StateMachine<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -180,7 +180,7 @@ where
             Err(error) => {
                 me.reason = Reason::Err(error);
                 let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(StateMachine::Disconnected(fut)))
+                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
         }
     }

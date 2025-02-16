@@ -179,7 +179,7 @@ impl From<Reason> for std::io::Error {
 /// callers can obtain references. In the future I may add these as unsafe functions if those cases
 /// can be described.
 pub struct Tether<I, T: Io<I>, R> {
-    state: StateMachine<T::Output>,
+    state: State<T::Output>,
     inner: TetherInner<I, T, R>,
 }
 
@@ -212,13 +212,13 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     /// # Note
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
-    pub fn new(connector: T, inner: T::Output, initializer: I, resolver: R) -> Self {
-        Self::new_with_context(connector, inner, initializer, resolver, Context::default())
+    pub fn new(connector: T, io: T::Output, initializer: I, resolver: R) -> Self {
+        Self::new_with_context(connector, io, initializer, resolver, Context::default())
     }
 
     fn new_with_context(
         connector: T,
-        inner: T::Output,
+        io: T::Output,
         initializer: I,
         resolver: R,
         context: Context,
@@ -228,7 +228,7 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
             inner: TetherInner {
                 context,
                 initializer,
-                io: inner,
+                io,
                 resolver,
                 reason: Reason::Eof,
                 connector,
@@ -237,7 +237,7 @@ impl<I, T: Io<I>, R: Resolver> Tether<I, T, R> {
     }
 
     fn reconnect(&mut self) {
-        self.state = StateMachine::Connected;
+        self.state = State::Connected;
         self.inner.context.reset();
     }
 
@@ -321,8 +321,9 @@ where
     }
 }
 
+/// The internal state machine which drives the connection and reconnect logic
 #[derive(Default)]
-enum StateMachine<T> {
+enum State<T> {
     #[default]
     Connected,
     Disconnected(PinFut<bool>),
