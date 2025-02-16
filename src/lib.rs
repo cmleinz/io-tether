@@ -104,16 +104,15 @@ pub trait Io<T>: Sized + Unpin {
     }
 }
 
-/// Represents the reason the [`Resolver`] is invoked
-///
-/// Currently this is either an error, or an 'end of file'.
+/// Enum representing reasons for a disconnect
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Reason {
     /// Represents the end of the file for the underlying io
     ///
-    /// This can occur when the end of a file is read from the filesystem, when the remote socket on
-    /// a TCP connection is closed, etc. Generally it indicates a successful end of the connection
+    /// This can occur when the end of a file is read from the file system, when the remote socket
+    /// on a TCP connection is closed, etc. Generally it indicates a successful end of the
+    /// connection
     Eof,
     /// An I/O Error occurred
     Err(std::io::Error),
@@ -363,6 +362,7 @@ impl Context {
         self.total_attempts += 1;
     }
 
+    /// Resets the current attempts, leaving the total reconnect attempts unchanged
     fn reset(&mut self) {
         self.current_attempts = 0;
     }
