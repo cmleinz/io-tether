@@ -28,7 +28,7 @@ arbitrary asynchronous code just before the I/O attempts to reconnect.
 
 ```rust
 use std::time::Duration;
-use io_tether::{Resolver, Context, Reason, Tether, PinFut};
+use io_tether::{Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
@@ -70,7 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let handle = tokio::spawn(async move {
-        let mut tether = Tether::<_, TcpStream, _>::connect(String::from("localhost:8080"), resolver)
+        let addr = String::from("localhost:8080");
+        let mut tether = Tether::connect(TcpConnector, addr, resolver)
             .await
             .unwrap();
 
