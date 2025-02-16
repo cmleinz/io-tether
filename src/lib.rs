@@ -298,6 +298,27 @@ where
             }
         }
     }
+
+    /// Connect to the I/O source, bypassing [`Resolver::unreachable`] implementation on a failure.
+    ///
+    /// This does still invoke [`Resolver::established`] if the connection is made successfully
+    pub async fn connect_without_retry(
+        mut connector: T,
+        initializer: I,
+        mut resolver: R,
+    ) -> Result<Self, std::io::Error> {
+        let context = Context::default();
+
+        let io = connector.connect(initializer.clone()).await?;
+        resolver.established(&context).await;
+        Ok(Self::new_with_context(
+            connector,
+            io,
+            initializer,
+            resolver,
+            context,
+        ))
+    }
 }
 
 #[derive(Default)]
