@@ -14,7 +14,7 @@ A small library for defining I/O types which reconnect on errors.
 To get started, add `io-tether` to your list of dependencies
 
 ```toml
-io-tether = { version = "0.3.0" }
+io-tether = { version = "0.4.0" }
 ```
 
 ### Basics
@@ -52,7 +52,7 @@ impl Resolver<Connector> for ChannelResolver {
     fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
         let sender = self.0.clone();
         let reason = context.reason().to_string();
-        // Try 8081 when retrying
+        // Try port 8081 when retrying
         conn.get_addr_mut().set_port(8081);
 
         Box::pin(async move {
@@ -68,7 +68,7 @@ impl Resolver<Connector> for ChannelResolver {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (tx, mut rx) = mpsc::channel(10);
+    let (tx, mut rx) = mpsc::channel(1);
     let resolver = ChannelResolver(tx);
 
     let listener_1 = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
