@@ -2,7 +2,22 @@ use super::*;
 
 use tokio::net::{TcpStream, ToSocketAddrs};
 
+/// Wrapper for building [`TcpStream`]s
 pub struct TcpConnector<A>(A);
+
+impl<A> TcpConnector<A> {
+    pub fn new(address: A) -> Self {
+        Self(address)
+    }
+
+    pub fn get_addr(&self) -> &A {
+        &self.0
+    }
+
+    pub fn get_addr_mut(&mut self) -> &mut A {
+        &mut self.0
+    }
+}
 
 impl<A, R> Tether<TcpConnector<A>, R>
 where
@@ -10,7 +25,7 @@ where
     A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {
     pub async fn connect_tcp(address: A, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = TcpConnector(address);
+        let mut connector = TcpConnector::new(address);
         let io = connector.connect().await?;
         Ok(Tether::new(connector, io, resolver))
     }

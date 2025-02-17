@@ -4,7 +4,22 @@ use std::path::Path;
 
 use tokio::net::UnixStream;
 
+/// Wrapper for building [`UnixStream`]s
 pub struct UnixConnector<P>(P);
+
+impl<P> UnixConnector<P> {
+    pub fn new(path: P) -> Self {
+        Self(path)
+    }
+
+    pub fn get_path(&self) -> &P {
+        &self.0
+    }
+
+    pub fn get_path_mut(&mut self) -> &mut P {
+        &mut self.0
+    }
+}
 
 impl<P, R> Tether<UnixConnector<P>, R>
 where
@@ -12,7 +27,7 @@ where
     P: AsRef<Path>,
 {
     pub async fn connect_unix(path: P, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = UnixConnector(path);
+        let mut connector = UnixConnector::new(path);
         let io = connector.connect().await?;
         Ok(Tether::new(connector, io, resolver))
     }

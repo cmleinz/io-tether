@@ -173,10 +173,7 @@ impl From<Reason> for std::io::Error {
 /// # Note
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
-/// way to reclaim the inner I/O type is by calling [`Tether::into_inner`]. This is by design, since
-/// in the future there may be reason to add unsafe code which cannot be guaranteed if outside
-/// callers can obtain references. In the future I may add these as unsafe functions if those cases
-/// can be described.
+/// way to reclaim the inner I/O type is by calling [`Tether::into_inner`].
 pub struct Tether<T: Io, R> {
     state: State<T::Output>,
     inner: TetherInner<T, R>,
@@ -204,7 +201,11 @@ impl<T: Io, R: Resolver> TetherInner<T, R> {
     }
 }
 
-impl<T: Io, R: Resolver> Tether<T, R> {
+impl<T, R> Tether<T, R>
+where
+    T: Io,
+    R: Resolver,
+{
     /// Construct a tether object from an existing I/O source
     ///
     /// # Note
@@ -236,13 +237,7 @@ impl<T: Io, R: Resolver> Tether<T, R> {
     pub fn into_inner(self) -> T::Output {
         self.inner.io
     }
-}
 
-impl<T, R> Tether<T, R>
-where
-    R: Resolver,
-    T: Io,
-{
     /// Connect to the I/O source, retrying on a failure.
     pub async fn connect(mut connector: T, mut resolver: R) -> Result<Self, std::io::Error> {
         let mut context = Context::default();
@@ -271,7 +266,8 @@ where
 
     /// Connect to the I/O source, bypassing [`Resolver::unreachable`] implementation on a failure.
     ///
-    /// This does still invoke [`Resolver::established`] if the connection is made successfully
+    /// This does still invoke [`Resolver::established`] if the connection is made successfully.
+    /// To bypass both, construct the IO source and pass it to [`Self::new`].
     pub async fn connect_without_retry(
         mut connector: T,
         mut resolver: R,
