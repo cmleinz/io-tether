@@ -44,17 +44,19 @@ use io_tether::{Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
-pub struct CallbackResolver {
-    channel: mpsc::Sender<()>,
-}
+pub struct ChannelResolver(mpsc::Sender<String>);
 
-impl Resolver for CallbackResolver {
+impl Resolver for ChannelResolver {
     fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
-        let sender = self.channel.clone();
+        let sender = self.0.clone();
+        let reason = context.reason().to_string();
 
         Box::pin(async move {
+            // Send the disconnect reason over the channel
+            sender.send(reason).await.unwrap();
+
+            // We can call arbirtary async code here
             tokio::time::sleep(Duration::from_millis(500)).await;
-            sender.send(()).await.unwrap();
             true
         })
     }
@@ -62,32 +64,44 @@ impl Resolver for CallbackResolver {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (channel, mut rx) = mpsc::channel(10);
+    let (tx, mut rx) = mpsc::channel(10);
+    let resolver = ChannelResolver(tx);
 
     let listener = tokio::net::TcpListener::bind("localhost:8080").await?;
-    tokio::spawn(async move {
+
+    let _handle = tokio::spawn(async move {
         loop {
             let (mut stream, _addr) = listener.accept().await.unwrap();
+
+            // We write exactly 6 bytes to each new connection
             stream.write_all(b"foobar").await.unwrap();
+
+            // Closing the stream triggers a disconnect
             stream.shutdown().await.unwrap();
         }
     });
 
-    let resolver = CallbackResolver {
-        channel,
-    };
-
     let handle = tokio::spawn(async move {
-        let addr = String::from("localhost:8080");
+	    let addr = String::from("localhost:8080"); 
         let mut tether = Tether::connect_tcp(addr, resolver)
             .await
             .unwrap();
 
         let mut buf = [0; 12];
+
+        // A disconnect occurs here after the the server writes
+        // "foobar" once. The disconnect is detected and forwarded
+        // to the resolver, which says to sleep and reconnect. 
+        // 
+        // We reconnect and get the next 6 bytes. This all happens
+        // under the hood without needing to handle it at each read
+        // callsite
         tether.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"foobarfoobar");
     });
     
+    // Since a disconnect occurred during the call to read_exact,
+    // the channel will contain the disconnect reason
     assert!(rx.recv().await.is_some());
     handle.await?;
 

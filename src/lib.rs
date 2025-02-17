@@ -180,6 +180,26 @@ impl From<Reason> for std::io::Error {
 /// result in the I/O automatically reconnecting if an error is detected during the underlying I/O
 /// call.
 ///
+/// # Example
+///
+/// ```no_run
+/// # use io_tether::*;
+/// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
+/// struct MyResolver;
+///
+/// impl Resolver for MyResolver {
+///     fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+///         println!("WARN(disconnect): {:?}", context);
+///         Box::pin(async move {true}) // immediately retry the connection
+///     }
+/// }
+///
+/// let stream = Tether::connect_tcp("localhost:8080", MyResolver).await?;
+///
+/// // Regardless of which half detects the disconnect, a reconnect will be attempted
+/// let (read, write) = tokio::io::split(stream);
+/// # Ok(()) }
+/// ```
 /// # Note
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
