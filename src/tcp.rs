@@ -1,3 +1,4 @@
+//! Tether implementations for TCP sockets
 use super::*;
 
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -24,6 +25,7 @@ where
     R: Resolver,
     A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {
+    /// Helper function for building a TCP connection
     pub async fn connect_tcp(address: A, resolver: R) -> Result<Self, std::io::Error> {
         let mut connector = TcpConnector::new(address);
         let io = connector.connect().await?;

@@ -22,3 +22,4 @@ tokio = { version = "1", features = ["full", "macros"] }
 default = ["net"]
 
 net = ["tokio/net"]
+fs = ["tokio/fs"]
