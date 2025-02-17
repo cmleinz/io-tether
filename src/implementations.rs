@@ -56,7 +56,7 @@ impl<T, R> TetherInner<T, R>
 where
     T: Io + Unpin,
     T::Output: AsyncRead + Unpin,
-    R: 'static + Resolver,
+    R: Resolver + Unpin,
 {
     fn poll_read_inner(
         mut self: Pin<&mut Self>,
@@ -93,7 +93,7 @@ impl<T, R> AsyncRead for Tether<T, R>
 where
     T: Io + Unpin,
     T::Output: AsyncRead + Unpin,
-    R: 'static + Resolver,
+    R: Resolver + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -110,7 +110,7 @@ impl<T, R> TetherInner<T, R>
 where
     T: Io + Unpin,
     T::Output: AsyncWrite + Unpin,
-    R: 'static + Resolver,
+    R: Resolver + Unpin,
 {
     fn poll_write_inner(
         mut self: Pin<&mut Self>,
@@ -186,7 +186,7 @@ impl<T, R> AsyncWrite for Tether<T, R>
 where
     T: Io + Unpin,
     T::Output: AsyncWrite + Unpin,
-    R: 'static + Resolver,
+    R: Resolver + Unpin,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,

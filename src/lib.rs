@@ -55,7 +55,7 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///     }
 /// }
 /// ```
-pub trait Resolver: Unpin {
+pub trait Resolver {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
     /// Returning `true` will result in a reconnect being attempted via `<T as Io>::reconnect`,
