@@ -94,12 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut buf = [0; 6];
 
-        // A disconnect occurs here after the the server writes
+        // A disconnect occurs here after the server writes
         // "foo" then drops the client, triggering a disconnect. 
         // The disconnect is detected and forwarded to the resolver, 
-        // which says to sleep and reconnect. 
+        // which adjusts the port, sleeps and attempts a reconnect. 
         // 
-        // The resolver then connect to a new remote socket and we 
+        // The resolver then connects to the new remote socket and we 
         // pull the next 3 bytes. This all happens under the hood 
         // without any extra work at each read callsite.
         tether.read_exact(&mut buf).await.unwrap();
