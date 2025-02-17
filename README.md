@@ -49,13 +49,9 @@ pub struct CallbackResolver {
 }
 
 impl Resolver for CallbackResolver {
-    fn disconnected(
-        &mut self,
-        context: &Context,
-        state: &Reason,
-    ) -> PinFut<bool> {
-
+    fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
         let sender = self.channel.clone();
+
         Box::pin(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
             sender.send(()).await.unwrap();

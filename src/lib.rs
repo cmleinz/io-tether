@@ -40,7 +40,8 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 /// pub struct RetryResolver(bool);
 ///
 /// impl Resolver for RetryResolver {
-///     fn disconnected(&mut self, context: &Context, reason: &Reason) -> PinFut<bool> {
+///     fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+///         let reason = context.reason();
 ///         println!("WARN: Disconnected from server {:?}", reason);
 ///         self.0 = true;
 ///
@@ -60,23 +61,21 @@ pub trait Resolver {
     ///
     /// Returning `true` will result in a reconnect being attempted via `<T as Io>::reconnect`,
     /// returning `false` will result in the error being returned from the originating call.
-    ///
-    /// # Note
-    ///
-    /// The [`Reason`] will describe the type of the underlying error. It can either be
-    /// `State::Eof`, in which case the end of file was reached, or an error. This information can
-    /// be leveraged in this function to determine whether to attempt to reconnect.
-    fn disconnected(&mut self, context: &Context, state: &Reason) -> PinFut<bool>;
+    fn disconnected(&mut self, context: &Context) -> PinFut<bool>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
     ///
     /// As with [`Self::disconnected`] the returned boolean determines whether the initial
     /// connection attempt is retried
-    fn unreachable(&mut self, context: &Context, state: &Reason) -> PinFut<bool> {
-        self.disconnected(context, state)
+    ///
+    /// Defaults to invoking [`Self::disconnected`]
+    fn unreachable(&mut self, context: &Context) -> PinFut<bool> {
+        self.disconnected(context)
     }
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt succeeds
+    ///
+    /// Defaults to invoking [`Self::reconnected`]
     fn established(&mut self, context: &Context) -> PinFut<()> {
         self.reconnected(context)
     }
@@ -188,12 +187,11 @@ struct TetherInner<T: Io, R> {
     connector: T,
     io: T::Output,
     resolver: R,
-    reason: Reason,
 }
 
 impl<T: Io, R: Resolver> TetherInner<T, R> {
     fn disconnected(&mut self) -> PinFut<bool> {
-        self.resolver.disconnected(&self.context, &self.reason)
+        self.resolver.disconnected(&self.context)
     }
 
     fn reconnected(&mut self) -> PinFut<()> {
@@ -222,7 +220,6 @@ where
                 context,
                 io,
                 resolver,
-                reason: Reason::Eof,
                 connector,
             },
         }
@@ -234,6 +231,7 @@ where
     }
 
     /// Consume the Tether, and return the underlying I/O type
+    #[inline]
     pub fn into_inner(self) -> T::Output {
         self.inner.io
     }
@@ -254,7 +252,7 @@ where
 
             context.increment_attempts();
 
-            if !resolver.unreachable(&context, &state).await {
+            if !resolver.unreachable(&context).await {
                 let Reason::Err(error) = state else {
                     unreachable!("state is immutable and established as Err above");
                 };
@@ -290,21 +288,31 @@ enum State<T> {
     Reconnected(PinFut<()>),
 }
 
-/// Contains metrics about the underlying connection
+/// Contains additional information about the disconnect
 ///
-/// Passed to the [`Resolver`], with each call to `disconnect`.
-///
-/// Currently tracks the number of reconnect attempts, but in the future may be expanded to include
-/// additional metrics.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+/// This type internally tracks the number of times a disconnect has occurred, and the reason for
+/// the disconnect.
+#[derive(Debug)]
 pub struct Context {
     total_attempts: usize,
     current_attempts: usize,
+    reason: Reason,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            total_attempts: 0,
+            current_attempts: 0,
+            reason: Reason::Eof,
+        }
+    }
 }
 
 impl Context {
     /// The number of reconnect attempts since the last successful connection. Reset each time
     /// the connection is established
+    #[inline]
     pub fn current_reconnect_attempts(&self) -> usize {
         self.current_attempts
     }
@@ -313,6 +321,7 @@ impl Context {
     ///
     /// The first time [`Resolver::disconnected`] or [`Resolver::unreachable`] is invoked this will
     /// return `0`, each subsequent time it will be incremented by 1.
+    #[inline]
     pub fn total_reconnect_attempts(&self) -> usize {
         self.total_attempts
     }
@@ -322,7 +331,14 @@ impl Context {
         self.total_attempts += 1;
     }
 
+    /// Get the current reason for the disconnect
+    #[inline]
+    pub fn reason(&self) -> &Reason {
+        &self.reason
+    }
+
     /// Resets the current attempts, leaving the total reconnect attempts unchanged
+    #[inline]
     fn reset(&mut self) {
         self.current_attempts = 0;
     }
@@ -353,7 +369,7 @@ mod tests {
     struct Once;
 
     impl Resolver for Once {
-        fn disconnected(&mut self, context: &Context, _state: &Reason) -> PinFut<bool> {
+        fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
             let retry = context.total_reconnect_attempts() < 1;
 
             Box::pin(async move { retry })

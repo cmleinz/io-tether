@@ -26,7 +26,7 @@ macro_rules! connected {
                         let reconnect_fut = $me.inner.connector.reconnect();
                         $me.state = State::Reconnecting(reconnect_fut);
                     } else {
-                        let err = $me.inner.reason.take().into();
+                        let err = $me.inner.context.reason.take().into();
                         return Poll::Ready(Err(err));
                     }
                 }
@@ -40,7 +40,7 @@ macro_rules! connected {
                             let fut = $me.inner.reconnected();
                             $me.state = State::Reconnected(fut);
                         }
-                        Err(error) => $me.inner.reason = Reason::Err(error),
+                        Err(error) => $me.inner.context.reason = Reason::Err(error),
                     }
                 }
                 State::Reconnected(ref mut fut) => {
@@ -75,13 +75,13 @@ where
 
         match result {
             Ok(0) => {
-                me.reason = Reason::Eof;
+                me.context.reason = Reason::Eof;
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -126,13 +126,13 @@ where
 
         match result {
             Ok(0) => {
-                me.reason = Reason::Eof;
+                me.context.reason = Reason::Eof;
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -153,7 +153,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -174,7 +174,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
