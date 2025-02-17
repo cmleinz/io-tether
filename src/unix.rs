@@ -5,29 +5,44 @@ use std::path::Path;
 
 use tokio::net::UnixStream;
 
-impl<I, R> Tether<I, UnixConnector, R>
-where
-    R: Resolver,
-    I: 'static + AsRef<Path> + Clone + Send + Sync,
-{
-    /// Initialize a Unix socket connection
-    pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = UnixConnector;
-        let io = connector.connect(initializer.clone()).await?;
-        Ok(Tether::new(connector, io, initializer, resolver))
+/// Wrapper for building [`UnixStream`]s
+pub struct UnixConnector<P>(P);
+
+impl<P> UnixConnector<P> {
+    pub fn new(path: P) -> Self {
+        Self(path)
+    }
+
+    pub fn get_path(&self) -> &P {
+        &self.0
+    }
+
+    pub fn get_path_mut(&mut self) -> &mut P {
+        &mut self.0
     }
 }
 
-/// Used to construct [`UnixStream`]s
-pub struct UnixConnector;
-
-impl<T> Io<T> for UnixConnector
+impl<P, R> Tether<UnixConnector<P>, R>
 where
-    T: 'static + AsRef<Path> + Clone + Send + Sync,
+    R: Resolver,
+    P: AsRef<Path>,
+{
+    /// Helper function for building a Unix socket connection
+    pub async fn connect_unix(path: P, resolver: R) -> Result<Self, std::io::Error> {
+        let mut connector = UnixConnector::new(path);
+        let io = connector.connect().await?;
+        Ok(Tether::new(connector, io, resolver))
+    }
+}
+
+impl<P> Io for UnixConnector<P>
+where
+    P: AsRef<Path>,
 {
     type Output = UnixStream;
 
-    fn connect(&mut self, initializer: T) -> PinFut<Result<Self::Output, std::io::Error>> {
-        Box::pin(UnixStream::connect(initializer))
+    fn connect(&mut self) -> PinFut<Result<Self::Output, std::io::Error>> {
+        let path = self.0.as_ref().to_path_buf();
+        Box::pin(UnixStream::connect(path))
     }
 }

@@ -1,67 +1,70 @@
-//! Tether implementations for File descriptors
-use std::path::{Path, PathBuf};
+//! Tether implementations for Files
+use std::path::Path;
 
 use super::*;
 
 use tokio::fs::{File, OpenOptions};
 
-/// Used to construct [`File`]s
-pub struct FileConnector;
-
-/// A trait to abstract over file creation
-pub trait FileInitializer {
-    fn options(&self) -> OpenOptions;
-
-    fn path(&self) -> impl AsRef<Path>;
-}
-
-#[derive(Debug, Clone)]
-struct BasicInitializer {
-    pub path: PathBuf,
+/// Wrapper for building [`File`]s
+///
+/// Convenience functions exist for the same constructors as exist in the standard library, but for
+/// more complicated file options this can be built manually
+pub struct FileConnector<P> {
+    pub path: P,
     pub options: OpenOptions,
 }
 
-impl FileInitializer for BasicInitializer {
-    fn options(&self) -> OpenOptions {
-        self.options.clone()
+impl<P> FileConnector<P> {
+    /// Construct a FileConnector with the same options as [`std::fs::File::open`]
+    pub fn open(path: P) -> Self {
+        let mut options = OpenOptions::new();
+        options.read(true);
+
+        Self { path, options }
     }
 
-    fn path(&self) -> impl AsRef<Path> {
-        &self.path
+    /// Construct a FileConnector with the same options as [`std::fs::File::create`]
+    pub fn create(path: P) -> Self {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+
+        Self { path, options }
+    }
+
+    /// Construct a FileConnector with the same options as [`std::fs::File::create_new`]
+    pub fn create_new(path: P) -> Self {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+
+        Self { path, options }
     }
 }
 
-impl<R> Tether<BasicInitializer, FileConnector, R>
+impl<P, R> Tether<FileConnector<P>, R>
 where
     R: Resolver,
+    P: AsRef<Path>,
 {
-    /// Initialize a file connection
+    /// Helper function for building a Unix socket connection
     pub async fn connect_file(
-        path: impl AsRef<Path>,
-        options: OpenOptions,
+        mut connector: FileConnector<P>,
         resolver: R,
     ) -> Result<Self, std::io::Error> {
-        let mut connector = FileConnector;
-        let initializer = BasicInitializer {
-            path: path.as_ref().to_path_buf(),
-            options,
-        };
-        let io = connector.connect(initializer.clone()).await?;
-        Ok(Tether::new(connector, io, initializer, resolver))
+        let io = connector.connect().await?;
+        Ok(Tether::new(connector, io, resolver))
     }
 }
 
-impl<T> Io<T> for FileConnector
+impl<P> Io for FileConnector<P>
 where
-    T: 'static + FileInitializer + Clone + Send + Sync,
+    P: AsRef<Path>,
 {
     type Output = File;
 
-    fn connect(&mut self, initializer: T) -> PinFut<Result<Self::Output, std::io::Error>> {
-        let path = initializer.path().as_ref().to_path_buf();
-        Box::pin(async move {
-            let opts = initializer.options();
-            opts.open(path).await
-        })
+    fn connect(&mut self) -> PinFut<Result<Self::Output, std::io::Error>> {
+        let path = self.path.as_ref().to_path_buf();
+        let options = self.options.clone();
+
+        Box::pin(async move { options.open(path).await })
     }
 }

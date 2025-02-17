@@ -23,11 +23,10 @@ macro_rules! connected {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
-                        let init = $me.inner.initializer.clone();
-                        let reconnect_fut = $me.inner.connector.reconnect(init);
+                        let reconnect_fut = $me.inner.connector.reconnect();
                         $me.state = State::Reconnecting(reconnect_fut);
                     } else {
-                        let err = $me.inner.reason.take().into();
+                        let err = $me.inner.context.reason.take().into();
                         return Poll::Ready(Err(err));
                     }
                 }
@@ -41,7 +40,7 @@ macro_rules! connected {
                             let fut = $me.inner.reconnected();
                             $me.state = State::Reconnected(fut);
                         }
-                        Err(error) => $me.inner.reason = Reason::Err(error),
+                        Err(error) => $me.inner.context.reason = Reason::Err(error),
                     }
                 }
                 State::Reconnected(ref mut fut) => {
@@ -53,12 +52,11 @@ macro_rules! connected {
     };
 }
 
-impl<I, T, R> TetherInner<I, T, R>
+impl<T, R> TetherInner<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncRead,
-    I: Unpin + Clone,
-    R: 'static + Resolver,
+    T: Io + Unpin,
+    T::Output: AsyncRead + Unpin,
+    R: Resolver + Unpin,
 {
     fn poll_read_inner(
         mut self: Pin<&mut Self>,
@@ -77,13 +75,13 @@ where
 
         match result {
             Ok(0) => {
-                me.reason = Reason::Eof;
+                me.context.reason = Reason::Eof;
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -91,12 +89,11 @@ where
     }
 }
 
-impl<I, T, R> AsyncRead for Tether<I, T, R>
+impl<T, R> AsyncRead for Tether<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncRead,
-    I: Unpin + Clone,
-    R: 'static + Resolver,
+    T: Io + Unpin,
+    T::Output: AsyncRead + Unpin,
+    R: Resolver + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -109,12 +106,11 @@ where
     }
 }
 
-impl<I, T, R> TetherInner<I, T, R>
+impl<T, R> TetherInner<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncWrite,
-    I: Unpin + Clone,
-    R: 'static + Resolver,
+    T: Io + Unpin,
+    T::Output: AsyncWrite + Unpin,
+    R: Resolver + Unpin,
 {
     fn poll_write_inner(
         mut self: Pin<&mut Self>,
@@ -130,13 +126,13 @@ where
 
         match result {
             Ok(0) => {
-                me.reason = Reason::Eof;
+                me.context.reason = Reason::Eof;
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -157,7 +153,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -178,7 +174,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.reason = Reason::Err(error);
+                me.context.reason = Reason::Err(error);
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -186,12 +182,11 @@ where
     }
 }
 
-impl<I, T, R> AsyncWrite for Tether<I, T, R>
+impl<T, R> AsyncWrite for Tether<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncWrite,
-    I: Unpin + Clone,
-    R: 'static + Resolver,
+    T: Io + Unpin,
+    T::Output: AsyncWrite + Unpin,
+    R: Resolver + Unpin,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
