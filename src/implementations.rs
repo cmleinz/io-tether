@@ -23,8 +23,7 @@ macro_rules! connected {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
-                        let init = $me.inner.initializer.clone();
-                        let reconnect_fut = $me.inner.connector.reconnect(init);
+                        let reconnect_fut = $me.inner.connector.reconnect();
                         $me.state = State::Reconnecting(reconnect_fut);
                     } else {
                         let err = $me.inner.reason.take().into();
@@ -53,11 +52,10 @@ macro_rules! connected {
     };
 }
 
-impl<I, T, R> TetherInner<I, T, R>
+impl<T, R> TetherInner<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncRead,
-    I: Unpin + Clone,
+    T: Io + Unpin,
+    T::Output: AsyncRead + Unpin,
     R: 'static + Resolver,
 {
     fn poll_read_inner(
@@ -91,11 +89,10 @@ where
     }
 }
 
-impl<I, T, R> AsyncRead for Tether<I, T, R>
+impl<T, R> AsyncRead for Tether<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncRead,
-    I: Unpin + Clone,
+    T: Io + Unpin,
+    T::Output: AsyncRead + Unpin,
     R: 'static + Resolver,
 {
     fn poll_read(
@@ -109,11 +106,10 @@ where
     }
 }
 
-impl<I, T, R> TetherInner<I, T, R>
+impl<T, R> TetherInner<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncWrite,
-    I: Unpin + Clone,
+    T: Io + Unpin,
+    T::Output: AsyncWrite + Unpin,
     R: 'static + Resolver,
 {
     fn poll_write_inner(
@@ -186,11 +182,10 @@ where
     }
 }
 
-impl<I, T, R> AsyncWrite for Tether<I, T, R>
+impl<T, R> AsyncWrite for Tether<T, R>
 where
-    T: Io<I>,
-    T::Output: AsyncWrite,
-    I: Unpin + Clone,
+    T: Io + Unpin,
+    T::Output: AsyncWrite + Unpin,
     R: 'static + Resolver,
 {
     fn poll_write(

@@ -2,27 +2,28 @@ use super::*;
 
 use tokio::net::{TcpStream, ToSocketAddrs};
 
-pub struct TcpConnector;
+pub struct TcpConnector<A>(A);
 
-impl<I, R> Tether<I, TcpConnector, R>
+impl<A, R> Tether<TcpConnector<A>, R>
 where
     R: Resolver,
-    I: 'static + ToSocketAddrs + Clone + Send + Sync,
+    A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {
-    pub async fn connect_tcp(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = TcpConnector;
-        let io = connector.connect(initializer.clone()).await?;
-        Ok(Tether::new(connector, io, initializer, resolver))
+    pub async fn connect_tcp(address: A, resolver: R) -> Result<Self, std::io::Error> {
+        let mut connector = TcpConnector(address);
+        let io = connector.connect().await?;
+        Ok(Tether::new(connector, io, resolver))
     }
 }
 
-impl<T> Io<T> for TcpConnector
+impl<A> Io for TcpConnector<A>
 where
-    T: 'static + ToSocketAddrs + Clone + Send + Sync,
+    A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {
     type Output = TcpStream;
 
-    fn connect(&mut self, initializer: T) -> PinFut<Result<Self::Output, std::io::Error>> {
-        Box::pin(TcpStream::connect(initializer))
+    fn connect(&mut self) -> PinFut<Result<Self::Output, std::io::Error>> {
+        let address = self.0.clone();
+        Box::pin(TcpStream::connect(address))
     }
 }
