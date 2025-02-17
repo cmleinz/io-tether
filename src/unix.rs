@@ -1,3 +1,4 @@
+//! Tether implementations for Unix sockets
 use super::*;
 
 use std::path::Path;
@@ -9,6 +10,7 @@ where
     R: Resolver,
     I: 'static + AsRef<Path> + Clone + Send + Sync,
 {
+    /// Initialize a Unix socket connection
     pub async fn connect_unix(initializer: I, resolver: R) -> Result<Self, std::io::Error> {
         let mut connector = UnixConnector;
         let io = connector.connect(initializer.clone()).await?;
@@ -16,6 +18,7 @@ where
     }
 }
 
+/// Used to construct [`UnixStream`]s
 pub struct UnixConnector;
 
 impl<T> Io<T> for UnixConnector

@@ -1,6 +1,8 @@
 #![doc = include_str!("../README.md")]
 use std::{future::Future, io::ErrorKind, pin::Pin};
 
+#[cfg(feature = "fs")]
+pub mod fs;
 mod implementations;
 #[cfg(feature = "net")]
 pub mod tcp;
