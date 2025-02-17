@@ -42,7 +42,7 @@ impl<P> FileConnector<P> {
 
 impl<P, R> Tether<FileConnector<P>, R>
 where
-    R: Resolver,
+    R: Resolver<FileConnector<P>>,
     P: AsRef<Path>,
 {
     /// Helper function for building a Unix socket connection

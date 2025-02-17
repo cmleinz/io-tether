@@ -39,17 +39,21 @@ Below is a simple example of a resolver implmentation that calls back
 to a channel whenever it detects a disconnect.
 
 ```rust
-use std::time::Duration;
+use std::{time::Duration, net::{SocketAddrV4, Ipv4Addr}};
 use io_tether::{Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 /// Custom resolver
 pub struct ChannelResolver(mpsc::Sender<String>);
 
-impl Resolver for ChannelResolver {
-    fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+type Connector = TcpConnector<SocketAddrV4>;
+
+impl Resolver<Connector> for ChannelResolver {
+    fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
         let sender = self.0.clone();
         let reason = context.reason().to_string();
+        // Try 8081 when retrying
+        conn.get_addr_mut().set_port(8081);
 
         Box::pin(async move {
             // Send the disconnect reason over the channel
@@ -67,37 +71,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut rx) = mpsc::channel(10);
     let resolver = ChannelResolver(tx);
 
-    let listener = tokio::net::TcpListener::bind("localhost:8080").await?;
+    let listener_1 = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener_2 = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
 
-    let _handle = tokio::spawn(async move {
-        loop {
-            let (mut stream, _addr) = listener.accept().await.unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _addr) = listener_1.accept().await.unwrap();
+        stream.write_all(b"foo").await.unwrap();
+    });
 
-            // We write exactly 6 bytes to each new connection
-            stream.write_all(b"foobar").await.unwrap();
-
-            // Closing the stream triggers a disconnect
-            stream.shutdown().await.unwrap();
-        }
+    tokio::spawn(async move {
+        let (mut stream, _addr) = listener_2.accept().await.unwrap();
+        stream.write_all(b"bar").await.unwrap();
     });
 
     let handle = tokio::spawn(async move {
-	    let addr = String::from("localhost:8080"); 
+        // Start by connecting to port 8080
+        let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080);
         let mut tether = Tether::connect_tcp(addr, resolver)
             .await
             .unwrap();
 
-        let mut buf = [0; 12];
+        let mut buf = [0; 6];
 
         // A disconnect occurs here after the the server writes
-        // "foobar" once. The disconnect is detected and forwarded
-        // to the resolver, which says to sleep and reconnect. 
+        // "foo" then drops the client, triggering a disconnect. 
+        // The disconnect is detected and forwarded to the resolver, 
+        // which says to sleep and reconnect. 
         // 
-        // We reconnect and get the next 6 bytes. This all happens
-        // under the hood without needing to handle it at each read
-        // callsite
+        // The resolver then connect to a new remote socket and we 
+        // pull the next 3 bytes. This all happens under the hood 
+        // without any extra work at each read callsite.
         tether.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"foobarfoobar");
+        assert_eq!(&buf, b"foobar");
     });
     
     // Since a disconnect occurred during the call to read_exact,

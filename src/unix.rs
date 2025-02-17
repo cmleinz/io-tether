@@ -24,7 +24,7 @@ impl<P> UnixConnector<P> {
 
 impl<P, R> Tether<UnixConnector<P>, R>
 where
-    R: Resolver,
+    R: Resolver<UnixConnector<P>>,
     P: AsRef<Path>,
 {
     /// Helper function for building a Unix socket connection

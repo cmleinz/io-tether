@@ -11,10 +11,14 @@ impl<A> TcpConnector<A> {
         Self(address)
     }
 
+    /// Get a ref to the address
+    #[inline]
     pub fn get_addr(&self) -> &A {
         &self.0
     }
 
+    /// Get a mutable ref to the address
+    #[inline]
     pub fn get_addr_mut(&mut self) -> &mut A {
         &mut self.0
     }
@@ -22,7 +26,7 @@ impl<A> TcpConnector<A> {
 
 impl<A, R> Tether<TcpConnector<A>, R>
 where
-    R: Resolver,
+    R: Resolver<TcpConnector<A>>,
     A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {
     /// Helper function for building a TCP connection

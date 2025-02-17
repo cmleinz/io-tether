@@ -41,8 +41,8 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 /// # use io_tether::{Context, Reason, Resolver, PinFut};
 /// pub struct RetryResolver(bool);
 ///
-/// impl Resolver for RetryResolver {
-///     fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+/// impl<C> Resolver<C> for RetryResolver {
+///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<bool> {
 ///         let reason = context.reason();
 ///         println!("WARN: Disconnected from server {:?}", reason);
 ///         self.0 = true;
@@ -58,12 +58,12 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///     }
 /// }
 /// ```
-pub trait Resolver {
+pub trait Resolver<C> {
     /// Invoked by Tether when an error/disconnect is encountered.
     ///
     /// Returning `true` will result in a reconnect being attempted via `<T as Io>::reconnect`,
     /// returning `false` will result in the error being returned from the originating call.
-    fn disconnected(&mut self, context: &Context) -> PinFut<bool>;
+    fn disconnected(&mut self, context: &Context, connector: &mut C) -> PinFut<bool>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
     ///
@@ -71,8 +71,8 @@ pub trait Resolver {
     /// connection attempt is retried
     ///
     /// Defaults to invoking [`Self::disconnected`]
-    fn unreachable(&mut self, context: &Context) -> PinFut<bool> {
-        self.disconnected(context)
+    fn unreachable(&mut self, context: &Context, connector: &mut C) -> PinFut<bool> {
+        self.disconnected(context, connector)
     }
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt succeeds
@@ -184,15 +184,19 @@ impl From<Reason> for std::io::Error {
 ///
 /// # Example
 ///
+/// ## Basic Resolver
+///
+/// Below is an example of a basic resolver which just logs the error and retries
+///
 /// ```no_run
 /// # use io_tether::*;
 /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
 /// struct MyResolver;
 ///
-/// impl Resolver for MyResolver {
-///     fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+/// impl<C> Resolver<C> for MyResolver {
+///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<bool> {
 ///         println!("WARN(disconnect): {:?}", context);
-///         Box::pin(async move {true}) // immediately retry the connection
+///         Box::pin(async move { true }) // always immediately retry the connection
 ///     }
 /// }
 ///
@@ -202,6 +206,31 @@ impl From<Reason> for std::io::Error {
 /// let (read, write) = tokio::io::split(stream);
 /// # Ok(()) }
 /// ```
+///
+/// # Specialized Resolver
+///
+/// For more specialized use cases we can implement [`Resolver`] only for certain connectors to give
+/// us extra control over the reconnect process.
+///
+/// ```
+/// # use io_tether::{*, tcp::TcpConnector};
+/// # use std::net::{SocketAddrV4, Ipv4Addr};
+/// struct MyResolver;
+///
+/// type Connector = TcpConnector<SocketAddrV4>;
+///
+/// impl Resolver<Connector> for MyResolver {
+///     fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
+///         // Because we've specialized our resolver to act on TcpConnector for IPv4, we can alter
+///         // the address in between the disconnect, and the reconnect, to try a different host
+///         conn.get_addr_mut().set_ip(Ipv4Addr::LOCALHOST);
+///         conn.get_addr_mut().set_port(8082);
+///
+///         Box::pin(async move { true }) // always immediately retry the connection
+///     }
+/// }
+/// ```
+///
 /// # Note
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
@@ -222,9 +251,10 @@ struct TetherInner<T: Io, R> {
     resolver: R,
 }
 
-impl<T: Io, R: Resolver> TetherInner<T, R> {
+impl<T: Io, R: Resolver<T>> TetherInner<T, R> {
     fn disconnected(&mut self) -> PinFut<bool> {
-        self.resolver.disconnected(&self.context)
+        self.resolver
+            .disconnected(&self.context, &mut self.connector)
     }
 
     fn reconnected(&mut self) -> PinFut<()> {
@@ -235,7 +265,7 @@ impl<T: Io, R: Resolver> TetherInner<T, R> {
 impl<T, R> Tether<T, R>
 where
     T: Io,
-    R: Resolver,
+    R: Resolver<T>,
 {
     /// Construct a tether object from an existing I/O source
     ///
@@ -285,7 +315,7 @@ where
 
             context.increment_attempts();
 
-            if !resolver.unreachable(&context).await {
+            if !resolver.unreachable(&context, &mut connector).await {
                 let Reason::Err(error) = state else {
                     unreachable!("state is immutable and established as Err above");
                 };
@@ -401,8 +431,8 @@ mod tests {
 
     struct Once;
 
-    impl Resolver for Once {
-        fn disconnected(&mut self, context: &Context) -> PinFut<bool> {
+    impl<T> Resolver<T> for Once {
+        fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
             let retry = context.total_reconnect_attempts() < 1;
 
             Box::pin(async move { retry })
