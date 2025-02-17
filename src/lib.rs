@@ -235,23 +235,23 @@ impl From<Reason> for std::io::Error {
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
 /// way to reclaim the inner I/O type is by calling [`Tether::into_inner`].
-pub struct Tether<T: Io, R> {
-    state: State<T::Output>,
-    inner: TetherInner<T, R>,
+pub struct Tether<C: Io, R> {
+    state: State<C::Output>,
+    inner: TetherInner<C, R>,
 }
 
 /// The inner type for tether.
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
 /// larger futs state machine
-struct TetherInner<T: Io, R> {
+struct TetherInner<C: Io, R> {
     context: Context,
-    connector: T,
-    io: T::Output,
+    connector: C,
+    io: C::Output,
     resolver: R,
 }
 
-impl<T: Io, R: Resolver<T>> TetherInner<T, R> {
+impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
     fn disconnected(&mut self) -> PinFut<bool> {
         self.resolver
             .disconnected(&self.context, &mut self.connector)
@@ -262,21 +262,21 @@ impl<T: Io, R: Resolver<T>> TetherInner<T, R> {
     }
 }
 
-impl<T, R> Tether<T, R>
+impl<C, R> Tether<C, R>
 where
-    T: Io,
-    R: Resolver<T>,
+    C: Io,
+    R: Resolver<C>,
 {
     /// Construct a tether object from an existing I/O source
     ///
     /// # Note
     ///
     /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
-    pub fn new(connector: T, io: T::Output, resolver: R) -> Self {
+    pub fn new(connector: C, io: C::Output, resolver: R) -> Self {
         Self::new_with_context(connector, io, resolver, Context::default())
     }
 
-    fn new_with_context(connector: T, io: T::Output, resolver: R, context: Context) -> Self {
+    fn new_with_context(connector: C, io: C::Output, resolver: R, context: Context) -> Self {
         Self {
             state: Default::default(),
             inner: TetherInner {
@@ -295,12 +295,12 @@ where
 
     /// Consume the Tether, and return the underlying I/O type
     #[inline]
-    pub fn into_inner(self) -> T::Output {
+    pub fn into_inner(self) -> C::Output {
         self.inner.io
     }
 
     /// Connect to the I/O source, retrying on a failure.
-    pub async fn connect(mut connector: T, mut resolver: R) -> Result<Self, std::io::Error> {
+    pub async fn connect(mut connector: C, mut resolver: R) -> Result<Self, std::io::Error> {
         let mut context = Context::default();
 
         loop {
@@ -330,7 +330,7 @@ where
     /// This does still invoke [`Resolver::established`] if the connection is made successfully.
     /// To bypass both, construct the IO source and pass it to [`Self::new`].
     pub async fn connect_without_retry(
-        mut connector: T,
+        mut connector: C,
         mut resolver: R,
     ) -> Result<Self, std::io::Error> {
         let context = Context::default();

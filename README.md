@@ -22,7 +22,7 @@ io-tether = { version = "0.3.0" }
 The primary type exposed by this library is the `Tether` type. This
 type is generic over two parameters:
 
-1. `T`: The I/O constructor. This is the type which produces the
+1. `C`: The I/O connector. This is the type which produces the
    underlying connections. For some io types like QUIC this may 
    need to be fairly involved, while for io like TCP, it may just
    be a wrapper around a socket address
@@ -43,11 +43,11 @@ use std::{time::Duration, net::{SocketAddrV4, Ipv4Addr}};
 use io_tether::{Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
-/// Custom resolver
 pub struct ChannelResolver(mpsc::Sender<String>);
 
 type Connector = TcpConnector<SocketAddrV4>;
 
+// NOTE: If you don't need to act on the connector, this can be implemented for generic `C`
 impl Resolver<Connector> for ChannelResolver {
     fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
         let sender = self.0.clone();
@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener_1 = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     let listener_2 = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
 
+    // Each listener, only accepts 1 connection, writing half of "foobar"
     tokio::spawn(async move {
         let (mut stream, _addr) = listener_1.accept().await.unwrap();
         stream.write_all(b"foo").await.unwrap();

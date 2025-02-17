@@ -52,17 +52,17 @@ macro_rules! connected {
     };
 }
 
-impl<T, R> TetherInner<T, R>
+impl<C, R> TetherInner<C, R>
 where
-    T: Io + Unpin,
-    T::Output: AsyncRead + Unpin,
-    R: Resolver<T> + Unpin,
+    C: Io + Unpin,
+    C::Output: AsyncRead + Unpin,
+    R: Resolver<C> + Unpin,
 {
     fn poll_read_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -89,11 +89,11 @@ where
     }
 }
 
-impl<T, R> AsyncRead for Tether<T, R>
+impl<C, R> AsyncRead for Tether<C, R>
 where
-    T: Io + Unpin,
-    T::Output: AsyncRead + Unpin,
-    R: Resolver<T> + Unpin,
+    C: Io + Unpin,
+    C::Output: AsyncRead + Unpin,
+    R: Resolver<C> + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -106,17 +106,17 @@ where
     }
 }
 
-impl<T, R> TetherInner<T, R>
+impl<C, R> TetherInner<C, R>
 where
-    T: Io + Unpin,
-    T::Output: AsyncWrite + Unpin,
-    R: Resolver<T> + Unpin,
+    C: Io + Unpin,
+    C::Output: AsyncWrite + Unpin,
+    R: Resolver<C> + Unpin,
 {
     fn poll_write_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<ControlFlow<std::io::Result<usize>, State<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<usize>, State<C::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -142,7 +142,7 @@ where
     fn poll_flush_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -163,7 +163,7 @@ where
     fn poll_shutdown_inner(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<T::Output>>> {
+    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
         let mut me = self.as_mut();
 
         let result = {
@@ -182,11 +182,11 @@ where
     }
 }
 
-impl<T, R> AsyncWrite for Tether<T, R>
+impl<C, R> AsyncWrite for Tether<C, R>
 where
-    T: Io + Unpin,
-    T::Output: AsyncWrite + Unpin,
-    R: Resolver<T> + Unpin,
+    C: Io + Unpin,
+    C::Output: AsyncWrite + Unpin,
+    R: Resolver<C> + Unpin,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
