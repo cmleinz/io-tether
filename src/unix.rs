@@ -29,9 +29,8 @@ where
 {
     /// Helper function for building a Unix socket connection
     pub async fn connect_unix(path: P, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = UnixConnector::new(path);
-        let io = connector.connect().await?;
-        Ok(Tether::new(connector, io, resolver))
+        let connector = UnixConnector::new(path);
+        Tether::connect(connector, resolver).await
     }
 }
 

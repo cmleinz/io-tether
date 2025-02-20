@@ -269,9 +269,10 @@ where
 {
     /// Construct a tether object from an existing I/O source
     ///
-    /// # Note
+    /// # Warning
     ///
-    /// Often a simpler way to construct a [`Tether`] object is through [`Tether::connect`]
+    /// Unlike [`Tether::connect`], this method does not invoke the resolver's `established` method.
+    /// It is generally recommended that you use [`Tether::connect`].
     pub fn new(connector: C, io: C::Output, resolver: R) -> Self {
         Self::new_with_context(connector, io, resolver, Context::default())
     }

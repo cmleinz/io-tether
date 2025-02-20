@@ -47,11 +47,10 @@ where
 {
     /// Helper function for building a Unix socket connection
     pub async fn connect_file(
-        mut connector: FileConnector<P>,
+        connector: FileConnector<P>,
         resolver: R,
     ) -> Result<Self, std::io::Error> {
-        let io = connector.connect().await?;
-        Ok(Tether::new(connector, io, resolver))
+        Tether::connect(connector, resolver).await
     }
 }
 

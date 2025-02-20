@@ -31,9 +31,8 @@ where
 {
     /// Helper function for building a TCP connection
     pub async fn connect_tcp(address: A, resolver: R) -> Result<Self, std::io::Error> {
-        let mut connector = TcpConnector::new(address);
-        let io = connector.connect().await?;
-        Ok(Tether::new(connector, io, resolver))
+        let connector = TcpConnector::new(address);
+        Tether::connect(connector, resolver).await
     }
 }
 
