@@ -262,6 +262,18 @@ impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
     }
 }
 
+impl<C: Io, R> Tether<C, R> {
+    /// Returns a reference to the inner resolver
+    pub fn resolver(&self) -> &R {
+        &self.inner.resolver
+    }
+
+    /// Returns a reference to the inner connector
+    pub fn connector(&self) -> &C {
+        &self.inner.connector
+    }
+}
+
 impl<C, R> Tether<C, R>
 where
     C: Io,
