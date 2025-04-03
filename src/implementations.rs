@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{Reason, State, TetherInner};
 
-use super::{ready::ready, Io, Resolver, Tether};
+use super::{Io, Resolver, Tether, ready::ready};
 
 /// I want to avoid implementing From<Reason> for Result<T, std::io::Error>, because it's not a
 /// generally applicable transformation. In the specific case of AsyncRead and AsyncWrite, we can
