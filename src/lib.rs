@@ -301,9 +301,25 @@ where
         }
     }
 
-    fn reconnect(&mut self) {
+    fn set_connect(&mut self) {
         self.state = State::Connected;
         self.inner.context.reset();
+    }
+
+    fn set_reconnected(&mut self) {
+        let fut = self.inner.reconnected();
+        self.state = State::Reconnected(fut);
+    }
+
+    fn set_reconnecting(&mut self) {
+        let fut = self.inner.connector.reconnect();
+        self.state = State::Reconnecting(fut);
+    }
+
+    fn set_disconnect(&mut self, reason: Reason) {
+        self.inner.context.reason = reason;
+        let fut = self.inner.disconnected();
+        self.state = State::Disconnected(fut);
     }
 
     /// Consume the Tether, and return the underlying I/O type

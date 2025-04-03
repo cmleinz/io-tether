@@ -23,8 +23,7 @@ macro_rules! connected {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
-                        let reconnect_fut = $me.inner.connector.reconnect();
-                        $me.state = State::Reconnecting(reconnect_fut);
+                        $me.set_reconnecting();
                     } else {
                         let err = $me.inner.context.reason.take().into();
                         return Poll::Ready(Err(err));
@@ -37,15 +36,16 @@ macro_rules! connected {
                     match result {
                         Ok(new_io) => {
                             $me.inner.io = new_io;
-                            let fut = $me.inner.reconnected();
-                            $me.state = State::Reconnected(fut);
+                            $me.set_reconnected();
                         }
-                        Err(error) => $me.inner.context.reason = Reason::Err(error),
+                        Err(error) => {
+                            $me.set_disconnect(Reason::Err(error));
+                        },
                     }
                 }
                 State::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
-                    $me.reconnect();
+                    $me.set_connect();
                 }
             }
         }
