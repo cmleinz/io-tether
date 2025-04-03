@@ -39,13 +39,13 @@ macro_rules! connected {
                             $me.set_reconnected();
                         }
                         Err(error) => {
-                            $me.set_disconnect(Reason::Err(error));
+                            $me.set_disconnected(Reason::Err(error));
                         },
                     }
                 }
                 State::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
-                    $me.set_connect();
+                    $me.set_connected();
                 }
             }
         }

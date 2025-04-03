@@ -301,7 +301,7 @@ where
         }
     }
 
-    fn set_connect(&mut self) {
+    fn set_connected(&mut self) {
         self.state = State::Connected;
         self.inner.context.reset();
     }
@@ -316,7 +316,7 @@ where
         self.state = State::Reconnecting(fut);
     }
 
-    fn set_disconnect(&mut self, reason: Reason) {
+    fn set_disconnected(&mut self, reason: Reason) {
         self.inner.context.reason = reason;
         let fut = self.inner.disconnected();
         self.state = State::Disconnected(fut);
