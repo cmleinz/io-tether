@@ -52,7 +52,7 @@ macro_rules! connected {
                         $me.set_reconnecting();
                     } else {
                         let opt_reason = $me.inner.context.reason.take();
-                        let reason = opt_reason.expect("Can only reason Disconnected state with Reason");
+                        let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
                         return Poll::Ready(reason.io_into());
                     }
                 }

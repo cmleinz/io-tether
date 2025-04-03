@@ -413,10 +413,17 @@ impl Context {
     ///
     /// # Panics
     ///
-    /// Might, panic if called outside of the methods in resolver.
+    /// Might, panic if called outside of the methods in resolver. Will also panic if called AFTER
+    /// and error has been returned
     #[inline]
     pub fn reason(&self) -> &Reason {
-        self.reason.as_ref().unwrap()
+        self.try_reason().unwrap()
+    }
+
+    /// Get the current optional reason for the disconnect
+    #[inline]
+    pub fn try_reason(&self) -> Option<&Reason> {
+        self.reason.as_ref()
     }
 
     /// Resets the current attempts, leaving the total reconnect attempts unchanged
