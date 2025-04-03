@@ -2,14 +2,14 @@
 name = "io-tether"
 version = "0.4.3"
 authors = ["Caleb Leinz <cmleinz@pm.me>"]
-edition = "2021"
+edition = "2024"
 description = "A small library for defining I/O types which reconnect on errors. "
 license = "MIT"
 repository = "https://github.com/cmleinz/io-tether"
 readme = "README.md"
 categories = ["asynchronous", "network-programming"]
 keywords = ["io", "async", "tokio"]
-rust-version = "1.83"
+rust-version = "1.85"
 publish = true
 
 [dependencies]
