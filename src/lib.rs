@@ -157,10 +157,6 @@ impl Reason {
             ),
         }
     }
-
-    fn take(&mut self) -> Self {
-        std::mem::replace(self, Self::Eof)
-    }
 }
 
 impl From<Reason> for std::io::Error {
@@ -317,7 +313,7 @@ where
     }
 
     fn set_disconnected(&mut self, reason: Reason) {
-        self.inner.context.reason = reason;
+        self.inner.context.reason = Some(reason);
         let fut = self.inner.disconnected();
         self.state = State::Disconnected(fut);
     }
@@ -384,21 +380,11 @@ enum State<T> {
 ///
 /// This type internally tracks the number of times a disconnect has occurred, and the reason for
 /// the disconnect.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Context {
     total_attempts: usize,
     current_attempts: usize,
-    reason: Reason,
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self {
-            total_attempts: 0,
-            current_attempts: 0,
-            reason: Reason::Eof,
-        }
-    }
+    reason: Option<Reason>,
 }
 
 impl Context {
@@ -424,9 +410,13 @@ impl Context {
     }
 
     /// Get the current reason for the disconnect
+    ///
+    /// # Panics
+    ///
+    /// Might, panic if called outside of the methods in resolver.
     #[inline]
     pub fn reason(&self) -> &Reason {
-        &self.reason
+        self.reason.as_ref().unwrap()
     }
 
     /// Resets the current attempts, leaving the total reconnect attempts unchanged
