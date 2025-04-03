@@ -442,9 +442,10 @@ pub(crate) mod ready {
 #[cfg(test)]
 mod tests {
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
         net::TcpListener,
     };
+    use tokio_test::io::{Builder, Mock};
 
     use super::*;
 
@@ -467,6 +468,157 @@ mod tests {
         }
     }
 
+    fn other(err: &'static str) -> std::io::Error {
+        std::io::Error::other(err)
+    }
+
+    trait ReadWrite: 'static + AsyncRead + AsyncWrite + Unpin {}
+    impl<T: 'static + AsyncRead + AsyncWrite + Unpin> ReadWrite for T {}
+
+    struct MockConnector<F>(F);
+
+    impl<F: FnMut() -> Mock> Io for MockConnector<F> {
+        type Output = Mock;
+
+        fn connect(&mut self) -> PinFut<Result<Self::Output, std::io::Error>> {
+            let value = self.0();
+
+            Box::pin(async move { Ok(value) })
+        }
+    }
+
+    async fn tester<A>(test: A, mock: impl ReadWrite, tether: impl ReadWrite)
+    where
+        A: AsyncFn(Box<dyn ReadWrite>) -> String,
+    {
+        let mock_result = (test)(Box::new(mock)).await;
+        let tether_result = (test)(Box::new(tether)).await;
+
+        assert_eq!(mock_result, tether_result);
+    }
+
+    async fn mock_acts_as_tether_mock<F, A>(mut gener: F, test: A)
+    where
+        F: FnMut() -> Mock + 'static + Unpin,
+        A: AsyncFn(Box<dyn ReadWrite>) -> String,
+    {
+        let mock = gener();
+        let tether_mock = Tether::connect(MockConnector(gener), Value(false))
+            .await
+            .unwrap();
+
+        tester(test, mock, tether_mock).await
+    }
+
+    #[tokio::test]
+    async fn single_read_then_eof() {
+        let test = async |mut reader: Box<dyn ReadWrite>| {
+            let mut output = String::new();
+            reader.read_to_string(&mut output).await.unwrap();
+            output
+        };
+
+        mock_acts_as_tether_mock(|| Builder::new().read(b"foobar").read(b"").build(), test).await;
+    }
+
+    #[tokio::test]
+    async fn two_read_then_eof() {
+        let test = async |mut reader: Box<dyn ReadWrite>| {
+            let mut output = String::new();
+            reader.read_to_string(&mut output).await.unwrap();
+            output
+        };
+
+        let builder = || Builder::new().read(b"foo").read(b"bar").read(b"").build();
+
+        mock_acts_as_tether_mock(builder, test).await;
+    }
+
+    #[tokio::test]
+    async fn immediate_error() {
+        let test = async |mut reader: Box<dyn ReadWrite>| {
+            let mut output = String::new();
+            let result = reader.read_to_string(&mut output).await;
+            format!("{:?}", result)
+        };
+
+        let builder = || {
+            Builder::new()
+                .read_error(std::io::Error::other("oops!"))
+                .build()
+        };
+
+        mock_acts_as_tether_mock(builder, test).await;
+    }
+
+    #[tokio::test]
+    async fn basic_write() {
+        let mock = || Builder::new().write(b"foo").write(b"bar").build();
+
+        let mut tether = Tether::connect(MockConnector(mock), Once).await.unwrap();
+        tether.write_all(b"foo").await.unwrap();
+        tether.write_all(b"bar").await.unwrap(); // should trigger error which is propagated
+    }
+
+    #[tokio::test]
+    async fn read_then_disconnect() {
+        struct AllowEof;
+        impl<T> Resolver<T> for AllowEof {
+            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
+                let value = !matches!(context.reason(), Reason::Eof); // Don't reconnect on EoF
+                Box::pin(async move { value })
+            }
+        }
+
+        let mock = Builder::new().read(b"foobarbaz").read(b"").build();
+        let mut count = 0;
+        // After each read call we error
+        let b = move |v: &[u8]| Builder::new().read(v).read_error(other("error")).build();
+        let gener = move || {
+            let result = match count {
+                0 => b(b"foo"),
+                1 => b(b"bar"),
+                2 => b(b"baz"),
+                _ => Builder::new().read(b"").build(),
+            };
+
+            count += 1;
+            result
+        };
+
+        let test = async |mut reader: Box<dyn ReadWrite>| {
+            let mut output = String::new();
+            reader.read_to_string(&mut output).await.unwrap();
+            output
+        };
+
+        let tether_mock = Tether::connect(MockConnector(gener), AllowEof)
+            .await
+            .unwrap();
+
+        tester(test, mock, tether_mock).await
+    }
+
+    #[tokio::test]
+    async fn split_works() {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _addr) = listener.accept().await.unwrap();
+                stream.write_all(b"foobar").await.unwrap();
+                stream.shutdown().await.unwrap();
+            }
+        });
+
+        let stream = Tether::connect_tcp(addr, Once).await.unwrap();
+        let (mut read, mut write) = tokio::io::split(stream);
+        let mut buf = [0u8; 6];
+        read.read_exact(&mut buf).await.unwrap(); // Disconnect happens here
+        assert_eq!(&buf, b"foobar");
+        write.write_all(b"foobar").await.unwrap(); // Reconnect is triggered
+    }
+
     #[tokio::test]
     async fn reconnect_value_is_respected() {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -477,6 +629,8 @@ mod tests {
             stream.shutdown().await.unwrap();
         });
 
+        // We set it to not reconnect, thus we expect this to work exactly as though we had not
+        // wrapped the connector in a tether at all
         let mut stream = Tether::connect_tcp(addr, Value(false)).await.unwrap();
         let mut output = String::new();
         stream.read_to_string(&mut output).await.unwrap();
