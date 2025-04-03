@@ -458,6 +458,15 @@ mod tests {
 
     use super::*;
 
+    struct Value(bool);
+
+    impl<T> Resolver<T> for Value {
+        fn disconnected(&mut self, _context: &Context, _connector: &mut T) -> PinFut<bool> {
+            let val = self.0;
+            Box::pin(async move { val })
+        }
+    }
+
     struct Once;
 
     impl<T> Resolver<T> for Once {
@@ -466,6 +475,22 @@ mod tests {
 
             Box::pin(async move { retry })
         }
+    }
+
+    #[tokio::test]
+    async fn reconnect_value_is_respected() {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            stream.write_all(b"foobar").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let mut stream = Tether::connect_tcp(addr, Value(false)).await.unwrap();
+        let mut output = String::new();
+        stream.read_to_string(&mut output).await.unwrap();
+        assert_eq!(&output, "foobar");
     }
 
     #[tokio::test]
@@ -483,7 +508,7 @@ mod tests {
 
         let mut stream = Tether::connect_tcp(addr, Once).await.unwrap();
         let mut buf = Vec::new();
-        assert!(stream.read_to_end(&mut buf).await.is_err());
+        stream.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf.as_slice(), &[0, 1])
     }
 }

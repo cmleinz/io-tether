@@ -6,6 +6,32 @@ use crate::{Reason, State, TetherInner};
 
 use super::{ready::ready, Io, Resolver, Tether};
 
+/// I want to avoid implementing From<Reason> for Result<T, std::io::Error>, because it's not a
+/// generally applicable transformation. In the specific case of AsyncRead and AsyncWrite, we can
+/// map to those, but there's no guarantee that Ok(0) always implies Eof for some arbitrary
+/// Result<usize, std::io::Error>
+trait IoInto<T>: Sized {
+    fn io_into(self) -> T;
+}
+
+impl IoInto<Result<usize, std::io::Error>> for Reason {
+    fn io_into(self) -> Result<usize, std::io::Error> {
+        match self {
+            Reason::Eof => Ok(0),
+            Reason::Err(error) => Err(error),
+        }
+    }
+}
+
+impl IoInto<Result<(), std::io::Error>> for Reason {
+    fn io_into(self) -> Result<(), std::io::Error> {
+        match self {
+            Reason::Eof => Ok(()),
+            Reason::Err(error) => Err(error),
+        }
+    }
+}
+
 macro_rules! connected {
     ($me:expr, $poll_method:ident, $cx:expr, $($args:expr),*) => {
         loop {
@@ -25,8 +51,8 @@ macro_rules! connected {
                     if retry {
                         $me.set_reconnecting();
                     } else {
-                        let err = $me.inner.context.reason.take().into();
-                        return Poll::Ready(Err(err));
+                        let reason = $me.inner.context.reason.take();
+                        return Poll::Ready(reason.io_into());
                     }
                 }
                 State::Reconnecting(ref mut fut) => {
