@@ -335,13 +335,14 @@ where
                     context.reset();
                     return Ok(Self::new_with_context(connector, io, resolver, context));
                 }
-                Err(error) => Reason::Err(error),
+                Err(error) => error,
             };
 
+            context.reason = Some(Reason::Err(state));
             context.increment_attempts();
 
             if !resolver.unreachable(&context, &mut connector).await {
-                let Reason::Err(error) = state else {
+                let Some(Reason::Err(error)) = context.reason else {
                     unreachable!("state is immutable and established as Err above");
                 };
 
@@ -565,6 +566,20 @@ mod tests {
         let mut tether = Tether::connect(MockConnector(mock), Once).await.unwrap();
         tether.write_all(b"foo").await.unwrap();
         tether.write_all(b"bar").await.unwrap(); // should trigger error which is propagated
+    }
+
+    #[tokio::test]
+    async fn failure_to_connect_doesnt_panic() {
+        struct Unreachable;
+        impl<T> Resolver<T> for Unreachable {
+            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
+                let _reason = context.reason(); // This should not panic
+                Box::pin(async move { false })
+            }
+        }
+
+        let result = Tether::connect_tcp("0.0.0.0:3150", Unreachable).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
