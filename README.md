@@ -14,7 +14,7 @@ A small library for defining I/O types which reconnect on errors.
 To get started, add `io-tether` to your list of dependencies
 
 ```toml
-io-tether = { version = "0.4.4" }
+io-tether = { version = "0.4.5" }
 ```
 
 ### Basics
