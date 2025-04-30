@@ -268,6 +268,11 @@ impl<C: Io, R> Tether<C, R> {
     pub fn connector(&self) -> &C {
         &self.inner.connector
     }
+
+    /// Returns a reference to the context
+    pub fn context(&self) -> &Context {
+        &self.inner.context
+    }
 }
 
 impl<C, R> Tether<C, R>
