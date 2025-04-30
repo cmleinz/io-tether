@@ -62,8 +62,7 @@ macro_rules! connected {
 
                     match result {
                         Ok(new_io) => {
-                            $me.inner.io = new_io;
-                            $me.set_reconnected();
+                            $me.set_reconnected(new_io);
                         }
                         Err(error) => {
                             $me.set_disconnected(Reason::Err(error));

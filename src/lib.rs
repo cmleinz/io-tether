@@ -307,7 +307,8 @@ where
         self.inner.context.reset();
     }
 
-    fn set_reconnected(&mut self) {
+    fn set_reconnected(&mut self, new_io: <C as Io>::Output) {
+        self.inner.io = new_io;
         let fut = self.inner.reconnected();
         self.state = State::Reconnected(fut);
     }
