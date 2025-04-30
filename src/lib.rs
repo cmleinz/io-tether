@@ -780,7 +780,7 @@ mod tests {
         // read_to_end callsite. But with this value set, read_to_end completes successfully
         let mut stream = Tether::connect_tcp(addr, Once).await.unwrap();
         stream.set_config(Config {
-            error_propegation_on_no_retry: config::ErrorPropagation::IoOperations,
+            error_propagation_on_no_retry: config::ErrorPropagation::IoOperations,
             ..Default::default()
         });
         let mut buf = Vec::new();

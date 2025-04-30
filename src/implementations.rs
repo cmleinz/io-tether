@@ -56,7 +56,7 @@ macro_rules! connected {
                     let opt_reason = $me.inner.context.reason.take();
                     let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
 
-                    match ($me.inner.config.error_propegation_on_no_retry, reason.1) {
+                    match ($me.inner.config.error_propagation_on_no_retry, reason.1) {
                         (ErrorPropagation::IoOperations, Source::Io) => return Poll::Ready(reason.0.io_into()),
                         (ErrorPropagation::All, _) => return Poll::Ready(reason.0.io_into()),
                         _ => return Poll::Ready($default),

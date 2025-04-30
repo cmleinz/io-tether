@@ -21,14 +21,26 @@ pub struct Config {
     /// elects *not* to reconnect. See [`ErrorPropagation`] for more details
     ///
     /// Default: [`ErrorPropagation::IoOperations`]
-    pub error_propegation_on_no_retry: ErrorPropagation,
+    pub error_propagation_on_no_retry: ErrorPropagation,
+}
+
+impl Config {
+    pub fn set_keep_data_on_failed_write(mut self, value: bool) -> Self {
+        self.keep_data_on_failed_write = value;
+        self
+    }
+
+    pub fn set_error_propagation_on_no_retry(mut self, value: ErrorPropagation) -> Self {
+        self.error_propagation_on_no_retry = value;
+        self
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             keep_data_on_failed_write: true,
-            error_propegation_on_no_retry: ErrorPropagation::IoOperations,
+            error_propagation_on_no_retry: ErrorPropagation::IoOperations,
         }
     }
 }
