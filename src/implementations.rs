@@ -2,7 +2,7 @@ use std::{ops::ControlFlow, pin::Pin, task::Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{Reason, State, TetherInner};
+use crate::{Reason, Source, State, TetherInner, config::ErrorPropagation};
 
 use super::{Io, Resolver, Tether, ready::ready};
 
@@ -33,7 +33,7 @@ impl IoInto<Result<(), std::io::Error>> for Reason {
 }
 
 macro_rules! connected {
-    ($me:expr, $poll_method:ident, $cx:expr, $($args:expr),*) => {
+    ($me:expr, $poll_method:ident, $cx:expr, $default:expr, $($args:expr),*) => {
         loop {
             match $me.state {
                 State::Connected => {
@@ -50,10 +50,16 @@ macro_rules! connected {
 
                     if retry {
                         $me.set_reconnecting();
-                    } else {
-                        let opt_reason = $me.inner.context.reason.take();
-                        let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
-                        return Poll::Ready(reason.io_into());
+                        continue;
+                    }
+
+                    let opt_reason = $me.inner.context.reason.take();
+                    let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
+
+                    match ($me.inner.config.error_propegation_on_no_retry, reason.1) {
+                        (ErrorPropagation::IoOperations, Source::Io) => return Poll::Ready(reason.0.io_into()),
+                        (ErrorPropagation::All, _) => return Poll::Ready(reason.0.io_into()),
+                        _ => return Poll::Ready($default),
                     }
                 }
                 State::Reconnecting(ref mut fut) => {
@@ -65,7 +71,7 @@ macro_rules! connected {
                             $me.set_reconnected(new_io);
                         }
                         Err(error) => {
-                            $me.set_disconnected(Reason::Err(error));
+                            $me.set_disconnected(Reason::Err(error), Source::Reconnect);
                         },
                     }
                 }
@@ -101,13 +107,13 @@ where
 
         match result {
             Ok(0) => {
-                me.context.reason = Some(Reason::Eof);
+                me.context.reason = Some((Reason::Eof, Source::Io));
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some(Reason::Err(error));
+                me.context.reason = Some((Reason::Err(error), Source::Io));
                 let fut = self.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -128,7 +134,7 @@ where
     ) -> Poll<std::io::Result<()>> {
         let mut me = self.as_mut();
 
-        connected!(me, poll_read_inner, cx, buf);
+        connected!(me, poll_read_inner, cx, Ok(()), buf);
     }
 }
 
@@ -145,24 +151,38 @@ where
     ) -> Poll<ControlFlow<std::io::Result<usize>, State<C::Output>>> {
         let mut me = self.as_mut();
 
+        if let Some(reason) = me.last_write.take() {
+            me.context.reason = Some((reason, Source::Io));
+            let fut = me.disconnected();
+            return Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)));
+        }
+
         let result = {
             let inner_pin = std::pin::pin!(&mut me.io);
             ready!(inner_pin.poll_write(cx, buf))
         };
 
-        match result {
-            Ok(0) => {
-                me.context.reason = Some(Reason::Eof);
-                let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
-            }
-            Ok(wrote) => Poll::Ready(ControlFlow::Break(Ok(wrote))),
-            Err(error) => {
-                me.context.reason = Some(Reason::Err(error));
-                let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
-            }
+        // NOTE: It is important that in error branches we return ControlFlow::Continue. Otherwise,
+        // we will break out of the reconnect loop, and drop the data that was written by the caller
+        let reason = match result {
+            Ok(0) => Reason::Eof,
+            Ok(wrote) => return Poll::Ready(ControlFlow::Break(Ok(wrote))),
+            Err(error) => Reason::Err(error),
+        };
+
+        if !me.config.keep_data_on_failed_write {
+            me.last_write = Some(reason);
+            // NOTE: We have no control over the buffer that is passed to us. The only way we can
+            // ensure we are not passed the same buffer the next call, is by reporting that we
+            // successfully wrote the data to the underlying object.
+            //
+            // This is not ideal, but it is the best we can do for now
+            return Poll::Ready(ControlFlow::Break(Ok(buf.len())));
         }
+
+        me.context.reason = Some((reason, Source::Io));
+        let fut = me.disconnected();
+        Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
     }
 
     fn poll_flush_inner(
@@ -179,7 +199,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some(Reason::Err(error));
+                me.context.reason = Some((Reason::Err(error), Source::Io));
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -200,7 +220,7 @@ where
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some(Reason::Err(error));
+                me.context.reason = Some((Reason::Err(error), Source::Io));
                 let fut = me.disconnected();
                 Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
             }
@@ -221,7 +241,7 @@ where
     ) -> Poll<Result<usize, std::io::Error>> {
         let mut me = self.as_mut();
 
-        connected!(me, poll_write_inner, cx, buf);
+        connected!(me, poll_write_inner, cx, Ok(0), buf);
     }
 
     fn poll_flush(
@@ -230,7 +250,7 @@ where
     ) -> Poll<Result<(), std::io::Error>> {
         let mut me = self.as_mut();
 
-        connected!(me, poll_flush_inner, cx,);
+        connected!(me, poll_flush_inner, cx, Ok(()),);
     }
 
     fn poll_shutdown(
@@ -239,6 +259,6 @@ where
     ) -> Poll<Result<(), std::io::Error>> {
         let mut me = self.as_mut();
 
-        connected!(me, poll_shutdown_inner, cx,);
+        connected!(me, poll_shutdown_inner, cx, Ok(()),);
     }
 }

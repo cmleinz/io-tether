@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 use std::{future::Future, io::ErrorKind, pin::Pin};
 
+pub mod config;
 #[cfg(feature = "fs")]
 pub mod fs;
 mod implementations;
@@ -8,6 +9,8 @@ mod implementations;
 pub mod tcp;
 #[cfg(all(feature = "net", target_family = "unix"))]
 pub mod unix;
+
+use config::Config;
 
 /// A dynamically dispatched static future
 pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
@@ -241,10 +244,13 @@ pub struct Tether<C: Io, R> {
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
 /// larger futs state machine
 struct TetherInner<C: Io, R> {
-    context: Context,
+    config: Config,
     connector: C,
+    context: Context,
     io: C::Output,
     resolver: R,
+    // Should only be acted on when Config::keep_data_on_failed_write is false
+    last_write: Option<Reason>,
 }
 
 impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
@@ -287,19 +293,36 @@ where
     /// Unlike [`Tether::connect`], this method does not invoke the resolver's `established` method.
     /// It is generally recommended that you use [`Tether::connect`].
     pub fn new(connector: C, io: C::Output, resolver: R) -> Self {
-        Self::new_with_context(connector, io, resolver, Context::default())
+        Self::new_with_config(connector, io, resolver, Config::default())
     }
 
-    fn new_with_context(connector: C, io: C::Output, resolver: R, context: Context) -> Self {
+    pub fn new_with_config(connector: C, io: C::Output, resolver: R, config: Config) -> Self {
+        Self::new_with_context(connector, io, resolver, Context::default(), config)
+    }
+
+    fn new_with_context(
+        connector: C,
+        io: C::Output,
+        resolver: R,
+        context: Context,
+        config: Config,
+    ) -> Self {
         Self {
             state: Default::default(),
             inner: TetherInner {
+                config,
+                connector,
                 context,
                 io,
                 resolver,
-                connector,
+                last_write: None,
             },
         }
+    }
+
+    /// Overrides the default configuration of the Tether object
+    pub fn set_config(&mut self, config: Config) {
+        self.inner.config = config;
     }
 
     fn set_connected(&mut self) {
@@ -318,8 +341,8 @@ where
         self.state = State::Reconnecting(fut);
     }
 
-    fn set_disconnected(&mut self, reason: Reason) {
-        self.inner.context.reason = Some(reason);
+    fn set_disconnected(&mut self, reason: Reason, source: Source) {
+        self.inner.context.reason = Some((reason, source));
         let fut = self.inner.disconnected();
         self.state = State::Disconnected(fut);
     }
@@ -355,7 +378,7 @@ where
                         return Some(true);
                     }
                     Err(error) => {
-                        self.set_disconnected(Reason::Err(error));
+                        self.set_disconnected(Reason::Err(error), Source::Reconnect);
                         return Some(false);
                     }
                 },
@@ -378,16 +401,22 @@ where
                 Ok(io) => {
                     resolver.established(&context).await;
                     context.reset();
-                    return Ok(Self::new_with_context(connector, io, resolver, context));
+                    return Ok(Self::new_with_context(
+                        connector,
+                        io,
+                        resolver,
+                        context,
+                        Config::default(),
+                    ));
                 }
                 Err(error) => error,
             };
 
-            context.reason = Some(Reason::Err(state));
+            context.reason = Some((Reason::Err(state), Source::Reconnect));
             context.increment_attempts();
 
             if !resolver.unreachable(&context, &mut connector).await {
-                let Some(Reason::Err(error)) = context.reason else {
+                let Some((Reason::Err(error), _)) = context.reason else {
                     unreachable!("state is immutable and established as Err above");
                 };
 
@@ -408,7 +437,13 @@ where
 
         let io = connector.connect().await?;
         resolver.established(&context).await;
-        Ok(Self::new_with_context(connector, io, resolver, context))
+        Ok(Self::new_with_context(
+            connector,
+            io,
+            resolver,
+            context,
+            Config::default(),
+        ))
     }
 }
 
@@ -422,6 +457,12 @@ enum State<T> {
     Reconnected(PinFut<()>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Source {
+    Io,
+    Reconnect,
+}
+
 /// Contains additional information about the disconnect
 ///
 /// This type internally tracks the number of times a disconnect has occurred, and the reason for
@@ -430,7 +471,7 @@ enum State<T> {
 pub struct Context {
     total_attempts: usize,
     current_attempts: usize,
-    reason: Option<Reason>,
+    reason: Option<(Reason, Source)>,
 }
 
 impl Context {
@@ -469,7 +510,7 @@ impl Context {
     /// Get the current optional reason for the disconnect
     #[inline]
     pub fn try_reason(&self) -> Option<&Reason> {
-        self.reason.as_ref()
+        self.reason.as_ref().map(|val| &val.0)
     }
 
     /// Resets the current attempts, leaving the total reconnect attempts unchanged
@@ -721,5 +762,68 @@ mod tests {
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf.as_slice(), &[0, 1])
+    }
+
+    #[tokio::test]
+    async fn error_is_consumed_when_set() {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            stream.write_all(b"foobar").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        // The Once resolver will attempt to reconnect one time after the socket has been closed.
+        // That attempt will produce a connection refused error which without
+        // `propegate_error_to_callsite_when_not_reconnecting: false` would be returned to the
+        // read_to_end callsite. But with this value set, read_to_end completes successfully
+        let mut stream = Tether::connect_tcp(addr, Once).await.unwrap();
+        stream.set_config(Config {
+            error_propegation_on_no_retry: config::ErrorPropagation::IoOperations,
+            ..Default::default()
+        });
+        let mut buf = Vec::new();
+
+        stream.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"foobar".as_slice())
+    }
+
+    #[tokio::test]
+    async fn write_data_is_silently_dropped_when_set() {
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut buf = vec![0u8; 3];
+
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            stream.read_exact(&mut buf[..]).await.unwrap();
+            stream.shutdown().await.unwrap();
+
+            buf
+        });
+
+        let mut stream = Tether::connect_tcp(addr, Value(false)).await.unwrap();
+        stream.set_config(Config {
+            keep_data_on_failed_write: false,
+            ..Default::default()
+        });
+
+        stream.write_all(b"foo").await.unwrap();
+
+        let buf = handle.await.unwrap();
+
+        // This call succeeds due to TCP shutdown only closing the read half of the socket. This
+        // call will trigger a TCP RST packet from the remote, which will cause future writes to
+        // fail
+        stream.write_all(b"bar").await.unwrap();
+
+        // Give the kernel some time to flush the buffer and receive RST
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // This calls only succeeds due to `keep_data_on_failed_write` being set to false
+        stream.write_all(b"baz").await.unwrap();
+
+        assert_eq!(b"foo".as_slice(), buf)
     }
 }
