@@ -324,6 +324,45 @@ where
         self.state = State::Disconnected(fut);
     }
 
+    /// Attempts to reconnect the underlying I/O object in the event it is disconnected.
+    ///
+    /// In some cases, the caller might want to handle invoke the reconnection logic *outside* of
+    /// a call to `read`, `write`, etc.
+    ///
+    /// # Cancellation Safety
+    ///
+    /// This function's cancellation safety is dependent on the cancellation safety of the
+    /// underlying IO implementation.
+    ///
+    /// # Return Type
+    ///
+    /// The state of the reconnect attempt is expressed by the return type as follows:
+    ///
+    /// + `None`: The underlying I/O object is already connected
+    /// + `Some(true)`: The underlying I/O object was disconnected, and the reconnect attempt was
+    ///   successful
+    /// + `Some(false)`: The underlying I/O object was disconnected, and the reconnect attempt was
+    ///   unsuccessful. The caller can invoke `tether.context().reason()` to see the error
+    pub async fn attempt_reconnect(&mut self) -> Option<bool> {
+        loop {
+            match &mut self.state {
+                State::Connected => return None,
+                State::Reconnected(fut) => fut.await,
+                State::Disconnected(_) => self.set_reconnecting(),
+                State::Reconnecting(fut) => match fut.await {
+                    Ok(new_io) => {
+                        self.set_reconnected(new_io);
+                        return Some(true);
+                    }
+                    Err(error) => {
+                        self.set_disconnected(Reason::Err(error));
+                        return Some(false);
+                    }
+                },
+            }
+        }
+    }
+
     /// Consume the Tether, and return the underlying I/O type
     #[inline]
     pub fn into_inner(self) -> C::Output {
