@@ -37,19 +37,17 @@ macro_rules! connected {
         loop {
             match $me.state {
                 State::Connected => {
-                    let new = Pin::new(&mut $me.inner);
-                    let cont = ready!(new.$poll_method($cx, $($args),*));
+                    let cont = ready!($me.inner.$poll_method(&mut $me.state, $cx, $($args),*));
 
-                    match cont {
-                        ControlFlow::Continue(fut) => $me.state = fut,
-                        ControlFlow::Break(val) => return Poll::Ready(val),
+                    if let ControlFlow::Break(val) = cont {
+                        return Poll::Ready(val);
                     }
                 }
                 State::Disconnected(ref mut fut) => {
                     let retry = ready!(fut.as_mut().poll($cx));
 
                     if retry {
-                        $me.set_reconnecting();
+                        $me.inner.set_reconnecting(&mut $me.state);
                         continue;
                     }
 
@@ -68,16 +66,16 @@ macro_rules! connected {
 
                     match result {
                         Ok(new_io) => {
-                            $me.set_reconnected(new_io);
+                            $me.inner.set_reconnected(&mut $me.state, new_io);
                         }
                         Err(error) => {
-                            $me.set_disconnected(Reason::Err(error), Source::Reconnect);
+                            $me.inner.set_disconnected(&mut $me.state, Reason::Err(error), Source::Reconnect);
                         },
                     }
                 }
                 State::Reconnected(ref mut fut) => {
                     ready!(fut.as_mut().poll($cx));
-                    $me.set_connected();
+                    $me.inner.set_connected(&mut $me.state);
                 }
             }
         }
@@ -91,15 +89,14 @@ where
     R: Resolver<C> + Unpin,
 {
     fn poll_read_inner(
-        mut self: Pin<&mut Self>,
+        &mut self,
+        state: &mut State<C::Output>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
-        let mut me = self.as_mut();
-
+    ) -> Poll<ControlFlow<std::io::Result<()>>> {
         let result = {
             let depth = buf.filled().len();
-            let inner_pin = std::pin::pin!(&mut me.io);
+            let inner_pin = std::pin::pin!(&mut self.io);
             let result = ready!(inner_pin.poll_read(cx, buf));
             let read_bytes = buf.filled().len().saturating_sub(depth);
             result.map(|_| read_bytes)
@@ -107,15 +104,13 @@ where
 
         match result {
             Ok(0) => {
-                me.context.reason = Some((Reason::Eof, Source::Io));
-                let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
+                self.set_disconnected(state, Reason::Eof, Source::Io);
+                Poll::Ready(ControlFlow::Continue(()))
             }
             Ok(_) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some((Reason::Err(error), Source::Io));
-                let fut = self.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
+                self.set_disconnected(state, Reason::Err(error), Source::Io);
+                Poll::Ready(ControlFlow::Continue(()))
             }
         }
     }
@@ -128,11 +123,11 @@ where
     R: Resolver<C> + Unpin,
 {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let mut me = self.as_mut();
+        let me = self.get_mut();
 
         connected!(me, poll_read_inner, cx, Ok(()), buf);
     }
@@ -145,20 +140,18 @@ where
     R: Resolver<C> + Unpin,
 {
     fn poll_write_inner(
-        mut self: Pin<&mut Self>,
+        &mut self,
+        state: &mut State<C::Output>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<ControlFlow<std::io::Result<usize>, State<C::Output>>> {
-        let mut me = self.as_mut();
-
-        if let Some(reason) = me.last_write.take() {
-            me.context.reason = Some((reason, Source::Io));
-            let fut = me.disconnected();
-            return Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)));
+    ) -> Poll<ControlFlow<std::io::Result<usize>>> {
+        if let Some(reason) = self.last_write.take() {
+            self.set_disconnected(state, reason, Source::Io);
+            return Poll::Ready(ControlFlow::Continue(()));
         }
 
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.io);
+            let inner_pin = std::pin::pin!(&mut self.io);
             ready!(inner_pin.poll_write(cx, buf))
         };
 
@@ -170,8 +163,8 @@ where
             Err(error) => Reason::Err(error),
         };
 
-        if !me.config.keep_data_on_failed_write {
-            me.last_write = Some(reason);
+        if !self.config.keep_data_on_failed_write {
+            self.last_write = Some(reason);
             // NOTE: We have no control over the buffer that is passed to us. The only way we can
             // ensure we are not passed the same buffer the next call, is by reporting that we
             // successfully wrote the data to the underlying object.
@@ -180,49 +173,44 @@ where
             return Poll::Ready(ControlFlow::Break(Ok(buf.len())));
         }
 
-        me.context.reason = Some((reason, Source::Io));
-        let fut = me.disconnected();
-        Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
+        self.set_disconnected(state, reason, Source::Io);
+        Poll::Ready(ControlFlow::Continue(()))
     }
 
     fn poll_flush_inner(
-        mut self: Pin<&mut Self>,
+        &mut self,
+        state: &mut State<C::Output>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
-        let mut me = self.as_mut();
-
+    ) -> Poll<ControlFlow<std::io::Result<()>>> {
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.io);
+            let inner_pin = std::pin::pin!(&mut self.io);
             ready!(inner_pin.poll_flush(cx))
         };
 
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some((Reason::Err(error), Source::Io));
-                let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
+                self.set_disconnected(state, Reason::Err(error), Source::Io);
+                Poll::Ready(ControlFlow::Continue(()))
             }
         }
     }
 
     fn poll_shutdown_inner(
-        mut self: Pin<&mut Self>,
+        &mut self,
+        state: &mut State<C::Output>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<ControlFlow<std::io::Result<()>, State<C::Output>>> {
-        let mut me = self.as_mut();
-
+    ) -> Poll<ControlFlow<std::io::Result<()>>> {
         let result = {
-            let inner_pin = std::pin::pin!(&mut me.io);
+            let inner_pin = std::pin::pin!(&mut self.io);
             ready!(inner_pin.poll_shutdown(cx))
         };
 
         match result {
             Ok(()) => Poll::Ready(ControlFlow::Break(Ok(()))),
             Err(error) => {
-                me.context.reason = Some((Reason::Err(error), Source::Io));
-                let fut = me.disconnected();
-                Poll::Ready(ControlFlow::Continue(State::Disconnected(fut)))
+                self.set_disconnected(state, Reason::Err(error), Source::Io);
+                Poll::Ready(ControlFlow::Continue(()))
             }
         }
     }
@@ -235,29 +223,29 @@ where
     R: Resolver<C> + Unpin,
 {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        let mut me = self.as_mut();
+        let me = self.get_mut();
 
         connected!(me, poll_write_inner, cx, Ok(0), buf);
     }
 
     fn poll_flush(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        let mut me = self.as_mut();
+        let me = self.get_mut();
 
         connected!(me, poll_flush_inner, cx, Ok(()),);
     }
 
     fn poll_shutdown(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        let mut me = self.as_mut();
+        let me = self.get_mut();
 
         connected!(me, poll_shutdown_inner, cx, Ok(()),);
     }

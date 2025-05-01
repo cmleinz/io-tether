@@ -1,5 +1,13 @@
 #![doc = include_str!("../README.md")]
-use std::{future::Future, io::ErrorKind, pin::Pin};
+use std::{
+    future::Future,
+    io::ErrorKind,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 pub mod config;
 #[cfg(feature = "fs")]
@@ -239,6 +247,26 @@ pub struct Tether<C: Io, R> {
     inner: TetherInner<C, R>,
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct Handle {
+    connected: Arc<AtomicBool>,
+}
+
+impl Handle {
+    /// Returns whether the underlying I/O is connected
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+
+    fn set_connected(&self) {
+        self.connected.store(true, Ordering::Release);
+    }
+
+    fn set_not_connected(&self) {
+        self.connected.store(false, Ordering::Release);
+    }
+}
+
 /// The inner type for tether.
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
@@ -254,13 +282,30 @@ struct TetherInner<C: Io, R> {
 }
 
 impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
-    fn disconnected(&mut self) -> PinFut<bool> {
-        self.resolver
-            .disconnected(&self.context, &mut self.connector)
+    fn set_connected(&mut self, state: &mut State<C::Output>) {
+        *state = State::Connected;
+        self.context.handle.set_connected();
+        self.context.reset();
     }
 
-    fn reconnected(&mut self) -> PinFut<()> {
-        self.resolver.reconnected(&self.context)
+    fn set_reconnected(&mut self, state: &mut State<C::Output>, new_io: <C as Io>::Output) {
+        self.io = new_io;
+        let fut = self.resolver.reconnected(&self.context);
+        *state = State::Reconnected(fut);
+    }
+
+    fn set_reconnecting(&mut self, state: &mut State<C::Output>) {
+        let fut = self.connector.reconnect();
+        *state = State::Reconnecting(fut);
+    }
+
+    fn set_disconnected(&mut self, state: &mut State<C::Output>, reason: Reason, source: Source) {
+        self.context.reason = Some((reason, source));
+        self.context.handle.set_not_connected();
+        let fut = self
+            .resolver
+            .disconnected(&self.context, &mut self.connector);
+        *state = State::Disconnected(fut);
     }
 }
 
@@ -323,70 +368,6 @@ where
     /// Overrides the default configuration of the Tether object
     pub fn set_config(&mut self, config: Config) {
         self.inner.config = config;
-    }
-
-    fn set_connected(&mut self) {
-        self.state = State::Connected;
-        self.inner.context.reset();
-    }
-
-    fn set_reconnected(&mut self, new_io: <C as Io>::Output) {
-        self.inner.io = new_io;
-        let fut = self.inner.reconnected();
-        self.state = State::Reconnected(fut);
-    }
-
-    fn set_reconnecting(&mut self) {
-        let fut = self.inner.connector.reconnect();
-        self.state = State::Reconnecting(fut);
-    }
-
-    fn set_disconnected(&mut self, reason: Reason, source: Source) {
-        self.inner.context.reason = Some((reason, source));
-        let fut = self.inner.disconnected();
-        self.state = State::Disconnected(fut);
-    }
-
-    /// Attempts to reconnect the underlying I/O object in the event it is disconnected.
-    ///
-    /// In some cases, the caller might want to handle invoke the reconnection logic *outside* of
-    /// a call to `read`, `write`, etc.
-    ///
-    /// # Cancellation Safety
-    ///
-    /// This function's cancellation safety is dependent on the cancellation safety of the
-    /// underlying IO implementation.
-    ///
-    /// # Return Type
-    ///
-    /// The state of the reconnect attempt is expressed by the return type as follows:
-    ///
-    /// + `None`: The underlying I/O object is already connected
-    /// + `Some(true)`: The underlying I/O object was disconnected, and the reconnect attempt was
-    ///   successful
-    /// + `Some(false)`: The underlying I/O object was disconnected, and the reconnect attempt was
-    ///   unsuccessful. The caller can invoke `tether.context().reason()` to see the error
-    pub async fn try_reconnect(&mut self) -> Option<bool> {
-        loop {
-            match &mut self.state {
-                State::Connected => return None,
-                State::Reconnected(fut) => {
-                    fut.await;
-                    self.set_connected();
-                }
-                State::Disconnected(_) => self.set_reconnecting(),
-                State::Reconnecting(fut) => match fut.await {
-                    Ok(new_io) => {
-                        self.set_reconnected(new_io);
-                        return Some(true);
-                    }
-                    Err(error) => {
-                        self.set_disconnected(Reason::Err(error), Source::Reconnect);
-                        return Some(false);
-                    }
-                },
-            }
-        }
     }
 
     /// Consume the Tether, and return the underlying I/O type
@@ -475,6 +456,7 @@ pub struct Context {
     total_attempts: usize,
     current_attempts: usize,
     reason: Option<(Reason, Source)>,
+    handle: Handle,
 }
 
 impl Context {
@@ -497,6 +479,13 @@ impl Context {
     fn increment_attempts(&mut self) {
         self.current_attempts += 1;
         self.total_attempts += 1;
+    }
+
+    /// Get the handle to the underlying I/O object
+    ///
+    /// Handle can be cheaply cloned.
+    pub fn handle(&self) -> &Handle {
+        &self.handle
     }
 
     /// Get the current reason for the disconnect
