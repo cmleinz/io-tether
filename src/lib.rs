@@ -366,11 +366,14 @@ where
     ///   successful
     /// + `Some(false)`: The underlying I/O object was disconnected, and the reconnect attempt was
     ///   unsuccessful. The caller can invoke `tether.context().reason()` to see the error
-    pub async fn attempt_reconnect(&mut self) -> Option<bool> {
+    pub async fn try_reconnect(&mut self) -> Option<bool> {
         loop {
             match &mut self.state {
                 State::Connected => return None,
-                State::Reconnected(fut) => fut.await,
+                State::Reconnected(fut) => {
+                    fut.await;
+                    self.set_connected();
+                }
                 State::Disconnected(_) => self.set_reconnecting(),
                 State::Reconnecting(fut) => match fut.await {
                     Ok(new_io) => {
