@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-use std::{ future::Future, io::ErrorKind, pin::Pin};
+use std::{future::Future, io::ErrorKind, pin::Pin};
 
 pub mod config;
 #[cfg(feature = "fs")]
