@@ -1,13 +1,5 @@
 #![doc = include_str!("../README.md")]
-use std::{
-    future::Future,
-    io::ErrorKind,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{ future::Future, io::ErrorKind, pin::Pin};
 
 pub mod config;
 #[cfg(feature = "fs")]
@@ -247,26 +239,6 @@ pub struct Tether<C: Io, R> {
     inner: TetherInner<C, R>,
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct Handle {
-    connected: Arc<AtomicBool>,
-}
-
-impl Handle {
-    /// Returns whether the underlying I/O is connected
-    pub fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Acquire)
-    }
-
-    fn set_connected(&self) {
-        self.connected.store(true, Ordering::Release);
-    }
-
-    fn set_not_connected(&self) {
-        self.connected.store(false, Ordering::Release);
-    }
-}
-
 /// The inner type for tether.
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
@@ -284,7 +256,6 @@ struct TetherInner<C: Io, R> {
 impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
     fn set_connected(&mut self, state: &mut State<C::Output>) {
         *state = State::Connected;
-        self.context.handle.set_connected();
         self.context.reset();
     }
 
@@ -301,7 +272,6 @@ impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
 
     fn set_disconnected(&mut self, state: &mut State<C::Output>, reason: Reason, source: Source) {
         self.context.reason = Some((reason, source));
-        self.context.handle.set_not_connected();
         let fut = self
             .resolver
             .disconnected(&self.context, &mut self.connector);
@@ -456,7 +426,6 @@ pub struct Context {
     total_attempts: usize,
     current_attempts: usize,
     reason: Option<(Reason, Source)>,
-    handle: Handle,
 }
 
 impl Context {
@@ -479,13 +448,6 @@ impl Context {
     fn increment_attempts(&mut self) {
         self.current_attempts += 1;
         self.total_attempts += 1;
-    }
-
-    /// Get the handle to the underlying I/O object
-    ///
-    /// Handle can be cheaply cloned.
-    pub fn handle(&self) -> &Handle {
-        &self.handle
     }
 
     /// Get the current reason for the disconnect
