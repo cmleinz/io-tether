@@ -9,6 +9,7 @@ use tokio::fs::{File, OpenOptions};
 ///
 /// Convenience functions exist for the same constructors as exist in the standard library, but for
 /// more complicated file options this can be built manually
+#[derive(Debug, Clone)]
 pub struct FileConnector<P> {
     pub path: P,
     pub options: OpenOptions,

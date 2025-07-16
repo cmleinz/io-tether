@@ -6,6 +6,7 @@ use std::path::Path;
 use tokio::net::UnixStream;
 
 /// Wrapper for building [`UnixStream`]s
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UnixConnector<P>(P);
 
 impl<P> UnixConnector<P> {

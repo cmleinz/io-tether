@@ -4,6 +4,7 @@ use super::*;
 use tokio::net::{TcpStream, ToSocketAddrs};
 
 /// Wrapper for building [`TcpStream`]s
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TcpConnector<A>(A);
 
 impl<A> TcpConnector<A> {
