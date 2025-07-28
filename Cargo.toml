@@ -13,6 +13,8 @@ rust-version = "1.85"
 publish = true
 
 [dependencies]
+futures-core = { version = "0.3.31", optional = true }
+futures-sink = { version = "0.3.31", optional = true }
 tokio = { version = "1" }
 
 [dev-dependencies]
@@ -24,3 +26,5 @@ default = ["net"]
 
 net = ["tokio/net"]
 fs = ["tokio/fs"]
+stream = ["dep:futures-core"]
+sink = ["dep:futures-sink"]
