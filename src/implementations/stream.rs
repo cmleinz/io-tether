@@ -3,7 +3,7 @@ use std::{ops::ControlFlow, task::Poll};
 use futures_core::Stream;
 
 use crate::{
-    Io, Reason, Resolver, Source, State, Tether, TetherInner,
+    Connector, Reason, Resolver, Source, State, Tether, TetherInner,
     implementations::{IoInto, connected::connected},
     ready::ready,
 };
@@ -19,7 +19,7 @@ impl<T> IoInto<Option<Result<T, std::io::Error>>> for Reason {
 
 impl<C, R, T, E> TetherInner<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: Stream<Item = Result<T, E>> + Unpin,
     R: Resolver<C> + Unpin,
     E: Into<std::io::Error>,
@@ -50,7 +50,7 @@ where
 
 impl<C, R, T, E> Stream for Tether<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: Stream<Item = Result<T, E>> + Unpin,
     R: Resolver<C> + Unpin,
     E: Into<std::io::Error>,

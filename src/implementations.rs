@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{Reason, Source, State, TetherInner};
 
-use super::{Io, Resolver, Tether, ready::ready};
+use super::{Connector, Resolver, Tether, ready::ready};
 
 #[cfg(feature = "stream")]
 mod stream;
@@ -103,7 +103,7 @@ use connected::connected;
 
 impl<C, R> TetherInner<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: AsyncRead + Unpin,
     R: Resolver<C> + Unpin,
 {
@@ -137,7 +137,7 @@ where
 
 impl<C, R> AsyncRead for Tether<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: AsyncRead + Unpin,
     R: Resolver<C> + Unpin,
 {
@@ -154,7 +154,7 @@ where
 
 impl<C, R> TetherInner<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: AsyncWrite + Unpin,
     R: Resolver<C> + Unpin,
 {
@@ -237,7 +237,7 @@ where
 
 impl<C, R> AsyncWrite for Tether<C, R>
 where
-    C: Io + Unpin,
+    C: Connector + Unpin,
     C::Output: AsyncWrite + Unpin,
     R: Resolver<C> + Unpin,
 {

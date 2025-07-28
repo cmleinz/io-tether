@@ -37,7 +37,7 @@ where
     }
 }
 
-impl<A> Io for TcpConnector<A>
+impl<A> Connector for TcpConnector<A>
 where
     A: 'static + ToSocketAddrs + Clone + Send + Sync,
 {

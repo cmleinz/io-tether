@@ -55,7 +55,7 @@ where
     }
 }
 
-impl<P> Io for FileConnector<P>
+impl<P> Connector for FileConnector<P>
 where
     P: AsRef<Path>,
 {

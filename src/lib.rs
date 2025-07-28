@@ -102,7 +102,7 @@ pub trait Resolver<C> {
 ///
 /// This trait is implemented for a number of types in the library, with the implementations placed
 /// behind feature flags
-pub trait Io {
+pub trait Connector {
     type Output;
 
     /// Initializes the connection to the I/O source
@@ -243,7 +243,7 @@ impl From<Reason> for std::io::Error {
 ///
 /// Currently, there is no way to obtain a reference into the underlying I/O object. And the only
 /// way to reclaim the inner I/O type is by calling [`Tether::into_inner`].
-pub struct Tether<C: Io, R> {
+pub struct Tether<C: Connector, R> {
     state: State<C::Output>,
     inner: TetherInner<C, R>,
 }
@@ -252,7 +252,7 @@ pub struct Tether<C: Io, R> {
 ///
 /// Helps satisfy the borrow checker when we need to mutate this while holding a mutable ref to the
 /// larger futs state machine
-struct TetherInner<C: Io, R> {
+struct TetherInner<C: Connector, R> {
     config: Config,
     connector: C,
     context: Context,
@@ -262,13 +262,13 @@ struct TetherInner<C: Io, R> {
     last_write: Option<Reason>,
 }
 
-impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
+impl<C: Connector, R: Resolver<C>> TetherInner<C, R> {
     fn set_connected(&mut self, state: &mut State<C::Output>) {
         *state = State::Connected;
         self.context.reset();
     }
 
-    fn set_reconnected(&mut self, state: &mut State<C::Output>, new_io: <C as Io>::Output) {
+    fn set_reconnected(&mut self, state: &mut State<C::Output>, new_io: <C as Connector>::Output) {
         self.io = new_io;
         let fut = self.resolver.reconnected(&self.context);
         *state = State::Reconnected(fut);
@@ -288,7 +288,7 @@ impl<C: Io, R: Resolver<C>> TetherInner<C, R> {
     }
 }
 
-impl<C: Io, R> Tether<C, R> {
+impl<C: Connector, R> Tether<C, R> {
     /// Returns a reference to the inner resolver
     pub fn resolver(&self) -> &R {
         &self.inner.resolver
@@ -307,7 +307,7 @@ impl<C: Io, R> Tether<C, R> {
 
 impl<C, R> Tether<C, R>
 where
-    C: Io,
+    C: Connector,
     R: Resolver<C>,
 {
     /// Construct a tether object from an existing I/O source
@@ -555,7 +555,7 @@ mod tests {
 
     struct MockConnector<F>(F);
 
-    impl<F: FnMut() -> Mock> Io for MockConnector<F> {
+    impl<F: FnMut() -> Mock> Connector for MockConnector<F> {
         type Output = Mock;
 
         fn connect(&mut self) -> PinFut<Result<Self::Output, std::io::Error>> {

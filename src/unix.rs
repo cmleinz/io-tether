@@ -35,7 +35,7 @@ where
     }
 }
 
-impl<P> Io for UnixConnector<P>
+impl<P> Connector for UnixConnector<P>
 where
     P: AsRef<Path>,
 {
