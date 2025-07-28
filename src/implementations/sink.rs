@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 use std::{ops::ControlFlow, pin::Pin, task::Poll};
 
 use futures_sink::Sink;
@@ -20,7 +21,6 @@ where
     ) -> Poll<ControlFlow<Result<(), <C::Output as Sink<I>>::Error>>>
     where
         C::Output: Sink<I, Error = std::io::Error> + Unpin,
-        I: AsRef<[u8]>,
     {
         let item = {
             let inner_pin = std::pin::pin!(&mut self.io);
@@ -43,7 +43,6 @@ where
     ) -> Poll<ControlFlow<Result<(), <C::Output as Sink<I>>::Error>>>
     where
         C::Output: Sink<I, Error = std::io::Error> + Unpin,
-        I: AsRef<[u8]>,
     {
         let item = {
             let inner_pin = std::pin::pin!(&mut self.io);
@@ -66,7 +65,6 @@ where
     ) -> Poll<ControlFlow<Result<(), <C::Output as Sink<I>>::Error>>>
     where
         C::Output: Sink<I, Error = std::io::Error> + Unpin,
-        I: AsRef<[u8]>,
     {
         let item = {
             let inner_pin = std::pin::pin!(&mut self.io);
@@ -88,7 +86,6 @@ where
     C: Connector + Unpin,
     C::Output: Sink<I, Error = std::io::Error> + Unpin,
     R: Resolver<C> + Unpin,
-    I: AsRef<[u8]>,
 {
     type Error = std::io::Error;
 
