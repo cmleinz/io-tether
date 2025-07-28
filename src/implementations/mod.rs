@@ -6,6 +6,8 @@ use crate::{Reason, Source, State, TetherInner};
 
 use super::{Connector, Resolver, Tether, ready::ready};
 
+#[cfg(feature = "sink")]
+mod sink;
 #[cfg(feature = "stream")]
 mod stream;
 
