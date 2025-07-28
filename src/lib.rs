@@ -140,6 +140,17 @@ impl std::fmt::Display for Reason {
 impl std::error::Error for Reason {}
 
 impl Reason {
+    pub(crate) fn clone_private(&self) -> Self {
+        match self {
+            Reason::Eof => Self::Eof,
+            Reason::Err(error) => {
+                let kind = error.kind();
+                let error = std::io::Error::new(kind, error.to_string());
+                Self::Err(error)
+            }
+        }
+    }
+
     /// A convenience function which returns whether the original error is capable of being retried
     pub fn retryable(&self) -> bool {
         use std::io::ErrorKind as Kind;

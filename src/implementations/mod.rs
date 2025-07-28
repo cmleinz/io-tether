@@ -56,11 +56,12 @@ pub(crate) mod connected {
                             }
                             crate::Action::Exhaust => {
                                 let opt_reason = $me.inner.context.reason.take();
-                                let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
+                                let (reason, source) = opt_reason.expect("Can only enter Disconnected state with Reason");
+                                $me.inner.set_disconnected(&mut $me.state, reason.clone_private(), source);
 
-                                let reason = match ($me.inner.config.error_propagation_on_no_retry, reason.1) {
-                                    (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.0.io_into(),
-                                    (crate::config::ErrorPropagation::All, _) => reason.0.io_into(),
+                                let reason = match ($me.inner.config.error_propagation_on_no_retry, source) {
+                                    (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.io_into(),
+                                    (crate::config::ErrorPropagation::All, _) => reason.io_into(),
                                     _ => $default,
                                 };
 
