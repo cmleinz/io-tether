@@ -41,22 +41,22 @@ pub type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static + Send>>;
 ///
 /// ```no_run
 /// # use std::time::Duration;
-/// # use io_tether::{Context, Reason, Resolver, PinFut};
+/// # use io_tether::{Action, Context, Reason, Resolver, PinFut};
 /// pub struct RetryResolver(bool);
 ///
 /// impl<C> Resolver<C> for RetryResolver {
-///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<bool> {
+///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<Action> {
 ///         let reason = context.reason();
 ///         println!("WARN: Disconnected from server {:?}", reason);
 ///         self.0 = true;
 ///
 ///         if context.current_reconnect_attempts() >= 5 || context.total_reconnect_attempts() >= 50 {
-///             return Box::pin(async move {false});
+///             return Box::pin(async move { Action::Exhaust });
 ///         }
 ///
 ///         Box::pin(async move {
 ///             tokio::time::sleep(Duration::from_secs(10)).await;
-///             true
+///             Action::AttemptReconnect
 ///         })
 ///     }
 /// }
@@ -66,16 +66,22 @@ pub trait Resolver<C> {
     ///
     /// Returning `true` will result in a reconnect being attempted via `<T as Io>::reconnect`,
     /// returning `false` will result in the error being returned from the originating call.
-    fn disconnected(&mut self, context: &Context, connector: &mut C) -> PinFut<bool>;
+    fn disconnected(&mut self, context: &Context, connector: &mut C) -> PinFut<Action>;
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt fails
     ///
     /// As with [`Self::disconnected`] the returned boolean determines whether the initial
     /// connection attempt is retried
     ///
-    /// Defaults to invoking [`Self::disconnected`]
+    /// Defaults to invoking [`Self::disconnected`] where [`Action::Ignore`] results in a disconnect
     fn unreachable(&mut self, context: &Context, connector: &mut C) -> PinFut<bool> {
-        self.disconnected(context, connector)
+        let fut = self.disconnected(context, connector);
+        Box::pin(async move {
+            match fut.await {
+                Action::AttemptReconnect => true,
+                Action::Exhaust | Action::Ignore => false,
+            }
+        })
     }
 
     /// Invoked within [`Tether::connect`] if the initial connection attempt succeeds
@@ -193,9 +199,11 @@ impl From<Reason> for std::io::Error {
 /// struct MyResolver;
 ///
 /// impl<C> Resolver<C> for MyResolver {
-///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<bool> {
+///     fn disconnected(&mut self, context: &Context, _: &mut C) -> PinFut<Action> {
 ///         println!("WARN(disconnect): {:?}", context);
-///         Box::pin(async move { true }) // always immediately retry the connection
+///
+///         // always immediately retry the connection
+///         Box::pin(async move { Action::AttemptReconnect })
 ///     }
 /// }
 ///
@@ -219,13 +227,14 @@ impl From<Reason> for std::io::Error {
 /// type Connector = TcpConnector<SocketAddrV4>;
 ///
 /// impl Resolver<Connector> for MyResolver {
-///     fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
+///     fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<Action> {
 ///         // Because we've specialized our resolver to act on TcpConnector for IPv4, we can alter
 ///         // the address in between the disconnect, and the reconnect, to try a different host
 ///         conn.get_addr_mut().set_ip(Ipv4Addr::LOCALHOST);
 ///         conn.get_addr_mut().set_port(8082);
 ///
-///         Box::pin(async move { true }) // always immediately retry the connection
+///         // always immediately retry the connection
+///         Box::pin(async move { Action::AttemptReconnect })
 ///     }
 /// }
 /// ```
@@ -401,12 +410,29 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Action {
+    /// Instruct the Tether object to attempt to reconnect to the underlying I/O resource
+    AttemptReconnect,
+    /// Instruct the Tether object to not attempt to reconnect to the underlying I/O resource, and
+    /// instead propegate the error up to the callsite.
+    Exhaust,
+    /// Ignore the reason for the disconnect, the same I/O instance will be preserved and the
+    /// it's waker will be registered with the underlying poll method.
+    ///
+    /// # Warning
+    ///
+    /// Some implementations may panic if they provided an EOF, and are subsequently polled again.
+    /// Use caution when returning this
+    Ignore,
+}
+
 /// The internal state machine which drives the connection and reconnect logic
 #[derive(Default)]
 enum State<T> {
     #[default]
     Connected,
-    Disconnected(PinFut<bool>),
+    Disconnected(PinFut<Action>),
     Reconnecting(PinFut<Result<T, std::io::Error>>),
     Reconnected(PinFut<()>),
 }
@@ -497,10 +523,10 @@ mod tests {
 
     use super::*;
 
-    struct Value(bool);
+    struct Value(Action);
 
     impl<T> Resolver<T> for Value {
-        fn disconnected(&mut self, _context: &Context, _connector: &mut T) -> PinFut<bool> {
+        fn disconnected(&mut self, _context: &Context, _connector: &mut T) -> PinFut<Action> {
             let val = self.0;
             Box::pin(async move { val })
         }
@@ -509,8 +535,12 @@ mod tests {
     struct Once;
 
     impl<T> Resolver<T> for Once {
-        fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
-            let retry = context.total_reconnect_attempts() < 1;
+        fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<Action> {
+            let retry = if context.total_reconnect_attempts() < 1 {
+                Action::AttemptReconnect
+            } else {
+                Action::Exhaust
+            };
 
             Box::pin(async move { retry })
         }
@@ -551,7 +581,7 @@ mod tests {
         A: AsyncFn(Box<dyn ReadWrite>) -> String,
     {
         let mock = gener();
-        let tether_mock = Tether::connect(MockConnector(gener), Value(false))
+        let tether_mock = Tether::connect(MockConnector(gener), Value(Action::Exhaust))
             .await
             .unwrap();
 
@@ -612,9 +642,9 @@ mod tests {
     async fn failure_to_connect_doesnt_panic() {
         struct Unreachable;
         impl<T> Resolver<T> for Unreachable {
-            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
+            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<Action> {
                 let _reason = context.reason(); // This should not panic
-                Box::pin(async move { false })
+                Box::pin(async move { Action::Exhaust })
             }
         }
 
@@ -626,8 +656,13 @@ mod tests {
     async fn read_then_disconnect() {
         struct AllowEof;
         impl<T> Resolver<T> for AllowEof {
-            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<bool> {
-                let value = !matches!(context.reason(), Reason::Eof); // Don't reconnect on EoF
+            fn disconnected(&mut self, context: &Context, _connector: &mut T) -> PinFut<Action> {
+                // Don't reconnect on EoF
+                let value = if !matches!(context.reason(), Reason::Eof) {
+                    Action::AttemptReconnect
+                } else {
+                    Action::Exhaust
+                };
                 Box::pin(async move { value })
             }
         }
@@ -693,7 +728,9 @@ mod tests {
 
         // We set it to not reconnect, thus we expect this to work exactly as though we had not
         // wrapped the connector in a tether at all
-        let mut stream = Tether::connect_tcp(addr, Value(false)).await.unwrap();
+        let mut stream = Tether::connect_tcp(addr, Value(Action::Exhaust))
+            .await
+            .unwrap();
         let mut output = String::new();
         stream.read_to_string(&mut output).await.unwrap();
         assert_eq!(&output, "foobar");
@@ -757,7 +794,9 @@ mod tests {
             buf
         });
 
-        let mut stream = Tether::connect_tcp(addr, Value(false)).await.unwrap();
+        let mut stream = Tether::connect_tcp(addr, Value(Action::Exhaust))
+            .await
+            .unwrap();
         stream.set_config(Config {
             keep_data_on_failed_write: false,
             ..Default::default()

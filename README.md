@@ -40,7 +40,7 @@ to a channel whenever it detects a disconnect.
 
 ```rust
 use std::{time::Duration, net::{SocketAddrV4, Ipv4Addr}};
-use io_tether::{Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
+use io_tether::{Action, Resolver, Context, Reason, Tether, PinFut, tcp::TcpConnector};
 use tokio::{net::TcpStream, io::{AsyncReadExt, AsyncWriteExt}, sync::mpsc};
 
 pub struct ChannelResolver(mpsc::Sender<String>);
@@ -49,7 +49,7 @@ type Connector = TcpConnector<SocketAddrV4>;
 
 // NOTE: If you don't need to act on the connector, this can be implemented for generic `C`
 impl Resolver<Connector> for ChannelResolver {
-    fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<bool> {
+    fn disconnected(&mut self, context: &Context, conn: &mut Connector) -> PinFut<Action> {
         let sender = self.0.clone();
         let reason = context.reason().to_string();
         // Try port 8081 when retrying
@@ -61,7 +61,7 @@ impl Resolver<Connector> for ChannelResolver {
 
             // We can call arbirtary async code here
             tokio::time::sleep(Duration::from_millis(500)).await;
-            true
+            Action::AttemptReconnect
         })
     }
 }

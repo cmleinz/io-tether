@@ -50,21 +50,29 @@ pub(crate) mod connected {
                     State::Disconnected(ref mut fut) => {
                         let retry = ready!(fut.as_mut().poll($cx));
 
-                        if retry {
-                            $me.inner.set_reconnecting(&mut $me.state);
-                            continue;
+                        match retry {
+                            crate::Action::AttemptReconnect => {
+                                $me.inner.set_reconnecting(&mut $me.state);
+                                continue;
+                            }
+                            crate::Action::Exhaust => {
+                                let opt_reason = $me.inner.context.reason.take();
+                                let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
+
+                                let reason = match ($me.inner.config.error_propagation_on_no_retry, reason.1) {
+                                    (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.0.io_into(),
+                                    (crate::config::ErrorPropagation::All, _) => reason.0.io_into(),
+                                    _ => $default,
+                                };
+
+                                return Poll::Ready(reason);
+                            }
+                            crate::Action::Ignore => {
+                                $me.inner.set_connected(&mut $me.state);
+                                continue;
+                            }
                         }
 
-                        let opt_reason = $me.inner.context.reason.take();
-                        let reason = opt_reason.expect("Can only enter Disconnected state with Reason");
-
-                        let reason = match ($me.inner.config.error_propagation_on_no_retry, reason.1) {
-                            (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.0.io_into(),
-                            (crate::config::ErrorPropagation::All, _) => reason.0.io_into(),
-                            _ => $default,
-                        };
-
-                        return Poll::Ready(reason);
                     }
                     State::Reconnecting(ref mut fut) => {
                         let result = ready!(fut.as_mut().poll($cx));
