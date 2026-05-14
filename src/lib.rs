@@ -833,4 +833,78 @@ mod tests {
 
         assert_eq!(b"foo".as_slice(), buf)
     }
+
+    // After exhaust on EOF, subsequent reads return EOF (not an error).
+    #[tokio::test]
+    async fn exhausted_eof_returns_eof_on_subsequent_read() {
+        let mock = || Builder::new().read(b"").build();
+        let mut tether = Tether::connect(MockConnector(mock), Value(Action::Exhaust))
+            .await
+            .unwrap();
+
+        let mut buf = Vec::new();
+        tether.read_to_end(&mut buf).await.unwrap();
+        assert!(buf.is_empty());
+
+        let mut buf2 = Vec::new();
+        tether.read_to_end(&mut buf2).await.unwrap();
+        assert!(buf2.is_empty());
+    }
+
+    // After exhaust on an IO error with ErrorPropagation::All, subsequent reads return the same
+    // error kind — not a silent EOF.
+    #[tokio::test]
+    async fn exhausted_error_returns_same_error_kind_on_subsequent_read() {
+        let mock =
+            || Builder::new().read_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)).build();
+        let mut tether = Tether::connect(MockConnector(mock), Value(Action::Exhaust))
+            .await
+            .unwrap();
+        tether.set_config(Config {
+            error_propagation_on_no_retry: config::ErrorPropagation::All,
+            ..Default::default()
+        });
+
+        let mut buf = Vec::new();
+        let first = tether.read_to_end(&mut buf).await;
+        assert_eq!(first.unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+
+        let mut buf2 = Vec::new();
+        let second = tether.read_to_end(&mut buf2).await;
+        assert_eq!(second.unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    // `disconnected` must be called exactly once per disconnect event. Previously the macro called
+    // `set_disconnected` a second time inside the Exhaust branch, causing a spurious second call.
+    #[tokio::test]
+    async fn disconnected_called_exactly_once_on_exhaust() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct CountingResolver(Arc<AtomicUsize>);
+
+        impl<T> Resolver<T> for CountingResolver {
+            fn disconnected(&mut self, _context: &Context, _: &mut T) -> PinFut<Action> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Action::Exhaust })
+            }
+        }
+
+        let count = Arc::new(AtomicUsize::new(0));
+        let mock = || Builder::new().read(b"").build();
+        let mut tether = Tether::connect(MockConnector(mock), CountingResolver(count.clone()))
+            .await
+            .unwrap();
+
+        let mut buf = Vec::new();
+        tether.read_to_end(&mut buf).await.unwrap();
+
+        // Poll again to confirm Exhausted state does not re-invoke the resolver.
+        let mut buf2 = Vec::new();
+        tether.read_to_end(&mut buf2).await.unwrap();
+
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
 }
