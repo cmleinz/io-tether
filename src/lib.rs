@@ -446,6 +446,9 @@ enum State<T> {
     Disconnected(PinFut<Action>),
     Reconnecting(PinFut<Result<T, std::io::Error>>),
     Reconnected(PinFut<()>),
+    /// Terminal state: resolver returned `Action::Exhaust`. No further reconnects or resolver
+    /// calls will occur. Subsequent polls return a result derived from the stored reason.
+    Exhausted(Reason, Source),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

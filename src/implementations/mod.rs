@@ -39,6 +39,14 @@ pub(crate) mod connected {
         ($me:expr, $poll_method:ident, $cx:expr, $default:expr, $($args:expr),*) => {
             loop {
                 match $me.state {
+                    State::Exhausted(ref reason, source) => {
+                        let result = match ($me.inner.config.error_propagation_on_no_retry, source) {
+                            (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.clone_private().io_into(),
+                            (crate::config::ErrorPropagation::All, _) => reason.clone_private().io_into(),
+                            _ => $default,
+                        };
+                        return Poll::Ready(result);
+                    }
                     State::Connected => {
                         let cont = ready!($me.inner.$poll_method(&mut $me.state, $cx, $($args),*));
 
@@ -57,7 +65,7 @@ pub(crate) mod connected {
                             crate::Action::Exhaust => {
                                 let opt_reason = $me.inner.context.reason.take();
                                 let (reason, source) = opt_reason.expect("Can only enter Disconnected state with Reason");
-                                $me.inner.set_disconnected(&mut $me.state, reason.clone_private(), source);
+                                $me.state = State::Exhausted(reason.clone_private(), source);
 
                                 let reason = match ($me.inner.config.error_propagation_on_no_retry, source) {
                                     (crate::config::ErrorPropagation::IoOperations, Source::Io) => reason.io_into(),
